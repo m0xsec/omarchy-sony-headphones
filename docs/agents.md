@@ -646,6 +646,7 @@ lives in [adr/](adr/) and [wiki/architecture.md](wiki/architecture.md).
 | `v2_eq_get` / `v2_eq_preset_request` / `v2_eq_bands_request` | v2 equalizer |
 | `v2_system_get` / `v2_stc_enabled_request` / `v2_bool_request` / `v2_stc_config_request` / `v2_auto_power_off_request` / `v2_stc_get` / `v2_apo_get` | v2 system / speak-to-chat |
 | `v2_device_list_get` / `v2_source_switch_request` | v2 multipoint |
+| `v2_pause_source_request` | v2 remote playback control (`PLAY_SET_STATUS` pause), forwarded by the headset to the current playback source |
 | `v2_refresh_requests` | Full post-connect v2 query list (incl. the 3-byte voice-guidance GET) |
 
 ### Reply parsers and state
@@ -694,6 +695,8 @@ lives in [adr/](adr/) and [wiki/architecture.md](wiki/architecture.md).
 | `_DiscoveryCache` / `_DISCOVERY` | In-memory device-snapshot and protocol-hint cache |
 | `connected_devices` | Connected Sony devices, briefly cached |
 | `find_device` | Pick the preferred or first connected device |
+| `headset_present` | Whether BlueZ still reports the headset connected, read fresh (the takeover check in `Daemon.link_failed`) |
+| `adapter_address` | This machine's Bluetooth address, read once; stamped as `local_address` so the widget can tell playback leaving this machine (`Model.switchedAway`) |
 
 ### Transport classes
 
@@ -806,6 +809,8 @@ lives in [adr/](adr/) and [wiki/architecture.md](wiki/architecture.md).
 | `Daemon.drop` | Remove and close one subscriber |
 | `Daemon.try_connect` | Find a device and open the link, with backoff; stamps `connected_since` |
 | `Daemon.lose_link` | Close, clear and publish a disconnected state; a link lost on a BGM write records `Daemon.reset_refusal`; a link that held past `STABLE_AFTER` resets the retry delay to `RETRY_MIN`, a younger one doubles it to `RETRY_MAX` |
+| `Daemon.pause_source` | Send the v2 pause to the current playback source when it is another peer; uses only a held session and re-checks the source at send time |
+| `Daemon.link_failed` | A background read or poll failed: a peer reset while the headset is still connected means another device took the session, so release it (`session_reason` `taken`) instead of reconnecting; anything else goes to `lose_link` |
 | `Daemon.release` | Hand the control session back deliberately, keeping last values; resets the retry delay to `RETRY_MIN` |
 | `Daemon.reclaim` | Take the control session back and refresh it |
 | `Daemon.release_if_idle` | Release an on-demand session after its quiet spell |
@@ -844,6 +849,7 @@ lives in [adr/](adr/) and [wiki/architecture.md](wiki/architecture.md).
 | `cmd_status` | `status` (`--json` or human) |
 | `cmd_set` / `cmd_cycle` / `cmd_power_off` | Device-write subcommands |
 | `cmd_release` / `cmd_reclaim` / `cmd_session` | Control-session subcommands |
+| `cmd_pause_source` | `pause-source`: pause the multipoint peer that owns playback, unless it is this machine (`Daemon.pause_source`) |
 | `_json_state` | Merge a response's refusal reason into emitted state |
 | `cmd_logging` | Show or change the daemon's log level |
 | `_report` | Shared JSON/stderr reporting for write subcommands |

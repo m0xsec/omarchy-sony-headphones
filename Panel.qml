@@ -25,6 +25,12 @@ Panel {
     var text = String(value).toLowerCase()
     return !(text === "off" || text === "false" || text === "no" || text === "0")
   }
+  readonly property bool pauseOnSwitch: {
+    var value = setting("pauseOnSwitch", true)
+    if (value === true || value === false) return value
+    var text = String(value).toLowerCase()
+    return !(text === "off" || text === "false" || text === "no" || text === "0")
+  }
   readonly property string pinnedAddress: String(setting("address", ""))
   // The daemon's starting log level. The link at the foot of the panel changes
   // the running level; this is what a fresh daemon boots with.
@@ -65,6 +71,7 @@ Panel {
     logging: root.loggingSetting
     sessionPolicy: root.sessionPolicy
     idleSeconds: root.idleSeconds
+    pauseOnSwitch: root.pauseOnSwitch
     onChanged: root.ensureCursor()
   }
 
@@ -207,16 +214,57 @@ Panel {
     function status(): string { return JSON.stringify(sony.state) }
   }
 
-  BarIconButton {
+  // Icon first, then the battery in small bold figures, sized to its content:
+  // the same shape as the other device-battery widgets on the bar, rather than
+  // BarIconButton, which draws its label in front of the icon.
+  WidgetButton {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: Model.barText(sony.state, root.showBattery, root.vertical)
-    slotSize: Style.bar.iconSlot * (root.showBattery && !root.vertical && sony.showing ? 2 : 1)
+    labelVisible: false
+    hasVisualContent: true
+    dimmed: !sony.showing
+    fixedWidth: root.vertical ? -1 : Math.round(barContent.implicitWidth + scaledHorizontalMargin * 2)
+    fixedHeight: root.vertical ? Math.round(barContent.implicitHeight + scaledVerticalPadding * 2) : -1
     tooltipText: Model.tooltip(sony.state) + "\n"
       + "Click: open panel · Right-click: cycle mode · Middle-click: refresh"
       + (sony.showing ? " · Wheel: ambient level" : "")
     foreground: sony.showing ? root.barForeground : Qt.darker(root.barForeground, 1.6)
+
+    Item {
+      id: barContent
+      anchors.centerIn: parent
+      scale: button.pressScale
+      implicitWidth: barRow.implicitWidth
+      implicitHeight: barRow.implicitHeight
+
+      Row {
+        id: barRow
+        anchors.centerIn: parent
+        spacing: Style.space(4)
+
+        Text {
+          anchors.verticalCenter: parent.verticalCenter
+          textFormat: Text.PlainText
+          text: Model.barIcon(sony.state)
+          color: button.foreground
+          font.family: button.fontFamily
+          font.pixelSize: Style.font.body
+        }
+
+        Text {
+          readonly property string battery: Model.barLabel(sony.state, root.showBattery, root.vertical)
+          anchors.verticalCenter: parent.verticalCenter
+          visible: battery !== ""
+          textFormat: Text.PlainText
+          text: battery
+          color: Model.batteryLow(sony.state) ? root.urgent : button.foreground
+          font.family: button.fontFamily
+          font.pixelSize: Style.font.caption
+          font.bold: true
+        }
+      }
+    }
 
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.RightButton) sony.cycleMode()
@@ -895,6 +943,7 @@ Panel {
       Item { Layout.fillWidth: true }
 
       Dropdown {
+        id: dropdown
         Layout.preferredWidth: Style.space(150)
         Layout.alignment: Qt.AlignVCenter
         showLabel: false
@@ -905,6 +954,12 @@ Panel {
         enabled: dropdownRow.available
         opacity: dropdownRow.available ? 1.0 : 0.5
         onChanged: function(value) {
+          // The shell's Dropdown assigns `value` itself when an option is
+          // picked, which breaks the binding below: from then on the trigger
+          // would keep showing that pick while the headphones report another
+          // (a phone switching playback source). Re-bind so the device stays
+          // the source of truth.
+          dropdown.value = Qt.binding(function() { return dropdownRow.value })
           if (!dropdownRow.available) return
           dropdownRow.picked(value)
         }

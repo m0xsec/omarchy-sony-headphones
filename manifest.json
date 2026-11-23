@@ -21,6 +21,7 @@
     "defaultSection": "right",
     "defaults": {
       "showBattery": "On",
+      "pauseOnSwitch": "On",
       "address": "",
       "logging": "errors",
       "sessionPolicy": "hold",
@@ -34,6 +35,14 @@
         "options": ["On", "Off"],
         "defaultValue": "On",
         "description": "Show the battery percentage next to the headphones icon."
+      },
+      {
+        "key": "pauseOnSwitch",
+        "type": "enum",
+        "label": "Pause on switch",
+        "options": ["On", "Off"],
+        "defaultValue": "On",
+        "description": "Keep one device playing at a time over multipoint: pause media on this computer when the headphones switch to another device (such as a phone using Android's auto switch), and pause that device when media starts on this computer."
       },
       {
         "key": "address",

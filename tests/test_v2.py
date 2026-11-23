@@ -331,6 +331,23 @@ class TestV2Replies(unittest.TestCase):
         self.assertFalse(self.apply([0x99, 0x01, 0x02]))
         self.assertFalse(self.apply([]))
 
+    def test_play_status_notifications_track_the_source(self):
+        # Captured from a WH-1000XM6: a phone starting and pausing playback.
+        self.assertTrue(self.apply([0xA5, 0x01, 0x00, 0x01, 0x00]))
+        self.assertIs(self.state["source_playing"], True)
+        self.assertTrue(self.apply([0xA5, 0x01, 0x00, 0x02, 0x00]))
+        self.assertIs(self.state["source_playing"], False)
+        self.assertTrue(self.apply([0xA3, 0x01, 0x00, 0x01, 0x00]))
+        self.assertIs(self.state["source_playing"], True)
+        self.assertTrue(self.apply([0xA5, 0x01, 0x00, 0x03, 0x00]))
+        self.assertIs(self.state["source_playing"], False)
+
+    def test_other_play_status_types_and_short_frames_are_ignored(self):
+        self.assertFalse(self.apply([0xA5, 0x20, 0x00, 0x01]))
+        self.assertFalse(self.apply([0xA5, 0x01, 0x00]))
+        self.assertFalse(self.apply([0xA5, 0x01, 0x00, 0x00, 0x00]))
+        self.assertIsNone(self.state["source_playing"])
+
     def test_device_list_with_class_bytes(self):
         payload = build_v2_device_list(
             [

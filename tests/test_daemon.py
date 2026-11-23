@@ -969,6 +969,165 @@ class TestReconnectBackoff(DemoDaemonMixin, unittest.TestCase):
         self.assertEqual(self.daemon.retry_delay, sonyhp.Daemon.RETRY_MIN)
 
 
+class TestSessionTakeover(DemoDaemonMixin, unittest.TestCase):
+    """A headset that gives the session to a phone is not fought over.
+
+    Over multipoint the headset resets our link when another device opens the
+    control session. Reconnecting would snatch it straight back and the two
+    would take turns indefinitely, so a reset while the headset is still
+    connected releases the session instead; a reset with the headset gone is
+    an ordinary dead link and reconnects as before.
+    """
+
+    def fail(self, exc, present):
+        with mock.patch.object(sonyhp, "headset_present", return_value=present) as probe, \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.daemon.link_failed(exc)
+        return probe
+
+    def test_a_reset_with_the_headset_present_releases_the_session(self):
+        self.connect()
+        before = self.daemon.state()
+        self.fail(ConnectionResetError(104, "Connection reset by peer"), present=True)
+        state = self.daemon.state()
+        self.assertIsNone(self.daemon.link)
+        self.assertEqual(state["session"], "released")
+        self.assertEqual(state["session_reason"], sonyhp.TAKEN_OVER)
+        self.assertIsNone(state["error"])
+        self.assertEqual(state["battery"], before["battery"])
+
+    def test_a_taken_session_is_not_reconnected_by_the_run_loop(self):
+        self.connect()
+        self.fail(ConnectionResetError(104, "Connection reset by peer"), present=True)
+        # run() only dials when the session is not released.
+        self.assertEqual(self.daemon.session, "released")
+
+    def test_a_reset_with_the_headset_gone_reconnects(self):
+        self.connect()
+        self.fail(ConnectionResetError(104, "Connection reset by peer"), present=False)
+        self.assertEqual(self.daemon.session, "connecting")
+        self.assertIsNone(self.daemon.state()["session_reason"])
+
+    def test_other_errors_never_count_as_a_takeover(self):
+        self.connect()
+        probe = self.fail(TimeoutError("timed out"), present=True)
+        probe.assert_not_called()
+        self.assertEqual(self.daemon.session, "connecting")
+
+    def test_a_command_reclaims_a_taken_session(self):
+        self.connect()
+        self.fail(ConnectionResetError(104, "Connection reset by peer"), present=True)
+        response = self.answer({"cmd": "reclaim"})
+        self.assertTrue(response["ok"])
+        self.assertEqual(response["state"]["session"], "held")
+        self.assertIsNone(response["state"]["session_reason"])
+
+    def test_a_manual_release_reports_the_user_as_the_reason(self):
+        self.connect()
+        response = self.answer({"cmd": "release"})
+        self.assertEqual(response["state"]["session_reason"], "user")
+
+
+class TestHeadsetPresent(unittest.TestCase):
+    def probe(self, output):
+        with mock.patch.object(sonyhp, "demo_mode", return_value=False), \
+                mock.patch.object(sonyhp, "bluetoothctl", return_value=output):
+            return sonyhp.headset_present("AA:BB:CC:DD:EE:FF")
+
+    def test_reads_the_connected_flag(self):
+        self.assertTrue(self.probe("Device AA:BB:CC:DD:EE:FF\n\tConnected: yes\n"))
+        self.assertFalse(self.probe("Device AA:BB:CC:DD:EE:FF\n\tConnected: no\n"))
+
+    def test_no_answer_means_not_present(self):
+        self.assertFalse(self.probe(""))
+
+
+class TestPauseSource(DemoDaemonMixin, unittest.TestCase):
+    """pause-source pauses the peer that owns playback, never this machine.
+
+    The headset forwards a PLAY_SET_STATUS pause to the current source, so the
+    daemon must check that source at send time: a pause that lands after the
+    headset switched to this machine would stop the desktop instead.
+    """
+
+    DEMO = "v2"
+    PHONE = "AA:BB:CC:DD:EE:FF"
+    HERE = "11:22:33:44:55:66"
+
+    def source(self, address):
+        self.daemon.link.state["playback_source"] = address
+
+    def pause(self, local=HERE):
+        with mock.patch.object(sonyhp, "adapter_address", return_value=local):
+            return self.answer({"cmd": "pause-source"})
+
+    def sent(self):
+        return self.daemon.link.device.remote_controls
+
+    def test_a_remote_source_is_paused(self):
+        self.connect()
+        self.source(self.PHONE)
+        response = self.pause()
+        self.assertTrue(response["ok"])
+        self.assertFalse(response["skipped"])
+        self.assertEqual(self.sent(), [bytes([0xA4, 0x01, 0x00, 0x01])])
+
+    def test_this_machine_as_source_is_never_paused(self):
+        self.connect()
+        self.source(self.HERE.lower())
+        response = self.pause()
+        self.assertTrue(response["ok"])
+        self.assertTrue(response["skipped"])
+        self.assertEqual(self.sent(), [])
+
+    def test_no_source_sends_nothing(self):
+        self.connect()
+        self.source(None)
+        self.assertTrue(self.pause()["skipped"])
+        self.assertEqual(self.sent(), [])
+
+    def test_a_released_session_is_not_reclaimed_for_it(self):
+        self.connect()
+        self.answer({"cmd": "release"})
+        response = self.pause()
+        self.assertFalse(response["ok"])
+        self.assertIsNone(self.daemon.link)
+        self.assertEqual(response["state"]["session"], "released")
+
+    def test_v1_has_no_playback_control(self):
+        self.DEMO = "1"
+        self.connect()
+        self.assertFalse(self.pause()["ok"])
+
+    def test_the_cli_parses_it(self):
+        args = sonyhp.build_parser().parse_args(["pause-source"])
+        self.assertIs(args.func, sonyhp.cmd_pause_source)
+
+
+class TestAdapterAddress(unittest.TestCase):
+    def setUp(self):
+        sonyhp._ADAPTER_ADDRESS.clear()
+        self.addCleanup(sonyhp._ADAPTER_ADDRESS.clear)
+
+    def read(self, output):
+        with mock.patch.object(sonyhp, "demo_mode", return_value=False), \
+                mock.patch.object(sonyhp, "bluetoothctl", return_value=output) as ctl:
+            first = sonyhp.adapter_address()
+            second = sonyhp.adapter_address()
+        return first, second, ctl
+
+    def test_reads_the_controller_line_once(self):
+        first, second, ctl = self.read("Controller 88:d8:2e:78:a9:d2 (public)\n\tName: enigma\n")
+        self.assertEqual(first, "88:D8:2E:78:A9:D2")
+        self.assertEqual(second, first)
+        self.assertEqual(ctl.call_count, 1)
+
+    def test_no_adapter_is_none_and_is_asked_again(self):
+        first, _, ctl = self.read("")
+        self.assertIsNone(first)
+        self.assertEqual(ctl.call_count, 2)
+
+
 class TestControlChannelBusy(unittest.TestCase):
     """EBUSY names the fight instead of reading as a dead device.
 

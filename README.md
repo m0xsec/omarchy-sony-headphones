@@ -146,6 +146,7 @@ Configured from the shell's widget settings, or directly on the entry in
 | `logging` | `errors` | Starting log level for the helper: `errors`, `all` or `off` |
 | `sessionPolicy` | `hold` | `hold` keeps the one control session; `on-demand` releases it after the idle delay so a phone can take over |
 | `idleSeconds` | `30` | Quiet seconds before an `on-demand` session is released; only used by `on-demand` |
+| `pauseOnSwitch` | `On` | Keep one multipoint device playing: pause this computer when the headphones switch to another device, and pause that device when media starts here |
 
 A Sony headset holds exactly one control session at a time: while this plugin's
 daemon owns it, a phone paired over multipoint cannot take it, and the reverse.
@@ -154,7 +155,18 @@ after a quiet spell so a phone can take over, and any command that needs the
 device reclaims it on its own. The panel carries the session as its own row —
 `Session: held`, `Session: released` or `Session: connecting` — and activating
 it hands the session over by hand. `release` and `reclaim` on the command line
-do the same.
+do the same. When the headset itself hands the session to a phone (the Sound
+Connect app opening it), the daemon steps aside instead of taking it back, and
+the row reads `Session: in use by another device`.
+
+With multipoint, `pauseOnSwitch` keeps one device playing at a time, which is
+what stops the headset bouncing between the phone and this computer: when the
+headphones switch to the phone, media here pauses (and resumes if the phone
+stops within a few seconds, as a muted autoplay on unlock does); when media
+starts here while the phone is still playing, the plugin asks the headset to
+pause the phone. Both directions need the session held. If the headset keeps
+switching with nothing playing, turn off Google's **Audio switch** for the
+headphones on the phone; see [Troubleshooting](docs/wiki/usage.md#the-headset-keeps-switching-between-the-phone-and-this-computer).
 
 ## The command line
 
@@ -180,6 +192,7 @@ bin/sony-headphones set playback-source AA:BB:CC:DD:EE:FF   # the multipoint pee
 bin/sony-headphones set speak-to-chat on
 bin/sony-headphones release              # hand the one control session to a phone
 bin/sony-headphones reclaim              # take it back and refresh
+bin/sony-headphones pause-source         # pause the multipoint peer that is playing, unless it is this machine
 bin/sony-headphones session              # show the session policy
 bin/sony-headphones logging off|errors|all
 bin/sony-headphones watch                # stream state changes as JSON lines

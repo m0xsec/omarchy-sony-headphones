@@ -384,6 +384,28 @@ V2_PERI_SET_EXTENDED = 0x3C
 V2_PERI_SUB_DEVICE_LIST = 0x02
 V2_PERI_SUB_SOURCE_SWITCH = 0x01
 
+# Remote playback control (libmdr's PLAY_SET_STATUS / SetPlayStatusPlaybackController):
+# [0xA4, inquired type 0x01, EnableDisable 0x00 = enable, control]. The headset
+# forwards the control over AVRCP to whichever multipoint peer is the current
+# playback source — confirmed on a WH-1000XM6 pausing a phone. Table 1 frames.
+V2_PLAY_RET_STATUS = 0xA3
+V2_PLAY_SET_STATUS = 0xA4
+V2_PLAY_NTFY_STATUS = 0xA5
+V2_PLAY_TYPE_PLAYBACK_CONTROL = 0x01
+V2_PLAY_CONTROL_PAUSE = 0x01
+# The status the current source reports (libmdr's PlaybackStatus), at byte 3 of
+# a PLAY_RET/NTFY_STATUS: [0xA5, type 0x01, enable, status, music/call]. Note
+# PAUSE is 0x02 here but 0x01 as a control. A WH-1000XM6 sends one on every
+# play and pause of the active peer, including a phone's muted autoplay.
+V2_PLAY_STATUS_PLAY = 0x01
+V2_PLAY_STATUS_STOPPED = (0x02, 0x03)
+
+
+def v2_pause_source_request() -> tuple[int, bytes]:
+    return req(bytes([V2_PLAY_SET_STATUS, V2_PLAY_TYPE_PLAYBACK_CONTROL, 0x00,
+                      V2_PLAY_CONTROL_PAUSE]))
+
+
 # Ambient sound control subtypes. The device answers whichever dialect its
 # firmware speaks, and writes echo that subtype back rather than assuming one.
 # 0x19 is the current over-ear generation's "noise adaptation" parameter (the
@@ -1044,6 +1066,9 @@ def initial_state() -> dict:
         # filled from the PERIPHERAL device-list family on protocol v2.
         "devices": None,
         "playback_source": None,
+        # Whether the current playback source says it is playing (v2 only):
+        # True, False, or None until the headset reports it.
+        "source_playing": None,
         "bgm_room_size": None,
         "bgm_subtype": None,
         "bgm_enabled": False,
@@ -1222,6 +1247,14 @@ def apply_payload_v2(state: dict, msg_type: int, payload: bytes) -> bool:
         # or interpreted beyond the length check.
         if code in (VOICE_NOTIFICATIONS_RET, VOICE_NOTIFICATIONS_NOTIFY) and len(payload) >= 4:
             state["voice_notifications"] = payload[2] == 0x00
+        return state != before
+
+    if code in (V2_PLAY_RET_STATUS, V2_PLAY_NTFY_STATUS) and len(payload) >= 4 \
+            and payload[1] == V2_PLAY_TYPE_PLAYBACK_CONTROL:
+        if payload[3] == V2_PLAY_STATUS_PLAY:
+            state["source_playing"] = True
+        elif payload[3] in V2_PLAY_STATUS_STOPPED:
+            state["source_playing"] = False
         return state != before
 
     # v2 still reads firmware through the v1 opcode, so the branch has to live
@@ -1743,6 +1776,48 @@ def find_device(preferred: str | None = None) -> dict | None:
                 return device
         return None
     return devices[0] if devices else None
+
+
+_ADAPTER_ADDRESS: list = []
+
+
+def adapter_address() -> str | None:
+    """This machine's Bluetooth address, read once and kept.
+
+    The multipoint device list names every peer, this machine included, with
+    nothing marking which one is us; the widget compares against this to tell
+    "playback left this machine" from a switch between two other peers.
+    """
+    if demo_mode():
+        return None
+    if not _ADAPTER_ADDRESS:
+        for line in bluetoothctl("show").splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and parts[0] == "Controller" and MAC_RE.match(parts[1]):
+                _ADAPTER_ADDRESS.append(parts[1].upper())
+                break
+        else:
+            return None
+    return _ADAPTER_ADDRESS[0]
+
+
+# The release reason when the headset gave the session to another device.
+TAKEN_OVER = "taken"
+
+
+def headset_present(address: str) -> bool:
+    """Whether BlueZ still reports this headset connected, read fresh.
+
+    Asked right after a link reset, so the cached device list would be the
+    wrong answer: it may predate the headset powering off.
+    """
+    if demo_mode():
+        return True
+    for line in bluetoothctl("info", address).splitlines():
+        key, _, value = line.strip().partition(":")
+        if key == "Connected":
+            return value.strip() == "yes"
+    return False
 
 
 def _channel_cache_path(address: str) -> str:
@@ -3225,6 +3300,7 @@ class DemoDeviceV2:
 
     def __init__(self):
         self.battery = 82
+        self.remote_controls: list[bytes] = []
         self.charging = False
         self.mode = 2          # 0 off, 1 ambient, 2 noise cancelling
         self.level = 12
@@ -3372,6 +3448,12 @@ class DemoDeviceV2:
         if not payload:
             return []
         code, sub = payload[0], (payload[1] if len(payload) > 1 else 0)
+
+        if msg_type == MSG_COMMAND_1 and code == V2_PLAY_SET_STATUS:
+            # The real headset forwards this to a phone; the stand-in only
+            # remembers it was asked, so a test can see the pause land.
+            self.remote_controls.append(bytes(payload))
+            return []
 
         if msg_type == MSG_COMMAND_2:
             if code == V2_PERI_GET and sub == V2_PERI_SUB_DEVICE_LIST:
@@ -3661,6 +3743,9 @@ class Daemon:
         # A released session keeps the last known values so the panel can still
         # show what the device reported after we hand the transport over.
         self.released_state: dict | None = None
+        # Why the session is released: "user", "idle", or TAKEN_OVER when the
+        # headset handed it to another device. Reported as `session_reason`.
+        self.release_reason: str | None = None
         # The most recent values from a live link, kept across lose_link so a
         # release that arrives after the link died can still hand over the real
         # device name and battery rather than a blank initial_state().
@@ -3695,6 +3780,8 @@ class Daemon:
         state["session"] = self.session
         state["session_policy"] = self.session_policy
         state["session_idle"] = self.session_idle
+        state["session_reason"] = self.release_reason if self.session == "released" else None
+        state["local_address"] = adapter_address()
         if self.reset_refusal:
             pending = state.get("pending") or []
             refused = dict(state.get("refused") or {})
@@ -3798,6 +3885,25 @@ class Daemon:
         LOG.error("link lost: %s", reason or "unknown reason")
         self.publish(state)
 
+    def link_failed(self, exc: BaseException) -> None:
+        """A background read or poll failed: reconnect, or step aside.
+
+        A Sony headset over multipoint gives its one control session to
+        whichever device asks last, and it says so by resetting our RFCOMM
+        link while the headset itself stays connected. Reconnecting then just
+        snatches the session back from the phone, the phone's app does the
+        same, and the two take turns for as long as both are running. So a
+        reset with the headset still present is a hand-off, not a fault: the
+        session is released the same way a manual release is, and the next
+        command, `reclaim`, or the headset coming back reclaims it. A reset
+        with the headset gone is an ordinary dead link and reconnects.
+        """
+        address = self.link.address if self.link is not None else None
+        if isinstance(exc, ConnectionResetError) and address and headset_present(address):
+            self.release(TAKEN_OVER)
+            return
+        self.lose_link(str(exc))
+
     def release(self, reason: str = "") -> None:
         """Hand the one control session back, deliberately.
 
@@ -3822,6 +3928,7 @@ class Daemon:
             self.link.close()
         self.link = None
         self.session = "released"
+        self.release_reason = reason or "user"
         self.last_activity = None
         state["connected"] = False
         state["error"] = None
@@ -3879,10 +3986,38 @@ class Daemon:
         try:
             self.link.request(self.link.poll_requests(), settle=1.0)
         except (NotConnected, OSError) as exc:
-            self.lose_link(str(exc))
+            self.link_failed(exc)
         else:
             if self.link is not None and self.link.last_rx == heard:
                 self.lose_link("the headphones stopped answering")
+
+    def pause_source(self) -> dict:
+        """Pause the peer that owns playback, when it is not this machine.
+
+        Sent when a local player starts while another multipoint peer (a phone)
+        is still the source: the headset forwards the pause to that peer, so it
+        stops instead of fighting the desktop for the headset. Only a session
+        we already hold is used — this never reclaims one the phone's app took —
+        and the source is checked at send time, because a pause that arrives
+        after the headset switched to us would stop the desktop instead.
+        """
+        link = self.link
+        if link is None:
+            return {"ok": False, "error": "the control session is not held", "state": self.state()}
+        if link.state.get("protocol") != "v2":
+            return {"ok": False, "error": "playback control needs the v2 protocol", "state": self.state()}
+        source = str(link.state.get("playback_source") or "").upper()
+        local = adapter_address() or ""
+        if not source or source == local:
+            LOG.info("pause-source skipped: %s", "no source" if not source else "this machine is the source")
+            return {"ok": True, "skipped": True, "state": self.state()}
+        try:
+            link.request([v2_pause_source_request()], settle=0.1)
+        except (NotConnected, OSError) as exc:
+            self.link_failed(exc)
+            return {"ok": False, "error": str(exc), "state": self.state()}
+        LOG.info("command applied: pause-source")
+        return {"ok": True, "skipped": False, "state": self.state()}
 
     def set_session(self, request: dict) -> None:
         """Apply a runtime `session` change, or raise what the command reports.
@@ -4017,6 +4152,9 @@ class Daemon:
                 return {"ok": False, "error": str(exc), "state": self.state()}
             LOG.info("command applied: reclaim")
             return {"ok": True, "state": self.state()}
+
+        if command == "pause-source":
+            return self.pause_source()
 
         if command == "session":
             try:
@@ -4263,7 +4401,7 @@ class Daemon:
                         try:
                             self.link.pump(0.05)
                         except (NotConnected, OSError) as exc:
-                            self.lose_link(str(exc))
+                            self.link_failed(exc)
 
                 self.poll_link()
 
@@ -4363,7 +4501,7 @@ def apply_command(link: Link, request: dict) -> None:
 
 def direct(request: dict, preferred: str | None) -> dict:
     """Do it ourselves, for when no daemon is running."""
-    if str(request.get("cmd", "")) in ("logging", "release", "reclaim", "session"):
+    if str(request.get("cmd", "")) in ("logging", "release", "reclaim", "session", "pause-source"):
         # These belong to the daemon's long-running process: the log level and
         # the session policy live there, and a one-shot helper releases its
         # link the moment it exits. Say so rather than report a change that
@@ -4550,6 +4688,10 @@ def cmd_reclaim(args) -> int:
     return _report(run_request({"cmd": "reclaim"}, args.address), args)
 
 
+def cmd_pause_source(args) -> int:
+    return _report(run_request({"cmd": "pause-source"}, args.address), args)
+
+
 def cmd_session(args) -> int:
     """Show or change the daemon's session policy and idle delay."""
     request = {"cmd": "session"}
@@ -4668,6 +4810,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("power-off", help="turn the headphones off").set_defaults(func=cmd_power_off)
     sub.add_parser("release", help="release the control session").set_defaults(func=cmd_release)
     sub.add_parser("reclaim", help="reconnect and hold the control session").set_defaults(func=cmd_reclaim)
+    sub.add_parser("pause-source",
+                   help="pause the multipoint peer that owns playback, unless it is this machine",
+                   ).set_defaults(func=cmd_pause_source)
 
     session = sub.add_parser("session", help="show or change the session policy")
     session.add_argument("value", nargs="?", choices=SESSION_POLICIES,

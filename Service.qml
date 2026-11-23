@@ -20,6 +20,9 @@ Item {
   // daemon boots from these and a running one is changed through setSession.
   property string sessionPolicy: "hold"
   property int idleSeconds: 30
+  // Pause the local media players when the headset switches playback to
+  // another device.
+  property bool pauseOnSwitch: true
 
   property var state: ({ connected: false })
   property string lastError: ""
@@ -169,18 +172,88 @@ Item {
   // Pause the local media players via MPRIS, so switching the headphones to
   // another peer does not leave this machine playing to no one. Reads the
   // players at call time; only players that can pause are asked.
+  // Returns the players that were playing and were asked to pause, so a
+  // provisional pause (followSource) can resume exactly those.
   function pauseLocalPlayers() {
     var players = Mpris.players ? Mpris.players.values : []
+    var paused = []
     for (var i = 0; i < players.length; i++) {
       var player = players[i]
-      if (player && player.canPause) player.pause()
+      if (!player || !player.canPause) continue
+      if (player.isPlaying) paused.push(player)
+      player.pause()
+    }
+    return paused
+  }
+
+  // The headset moved playback off this machine on its own (Android's
+  // auto-switch): pause here at once, or the desktop keeps streaming and the
+  // headset is pulled straight back, every few seconds, for as long as both
+  // play. But a phone reports "playing" for muted autoplay too — a video feed
+  // on unlock plays a second or few at a time — so the pause is provisional:
+  // if the phone stops within blipWindow, the players this paused resume and
+  // the source is handed back here. Past the window the pause stands. Only one
+  // blip is undone per BLIP_COOLDOWN_MS: a phone that keeps grabbing the
+  // headset every few seconds is playing for real, and resuming the desktop
+  // each time would only feed auto-switch another device to fight with.
+  property var switchPaused: []
+  property double lastBlipUndo: 0
+
+  function followSource(before, after) {
+    var local = after.local_address
+    if (Model.switchedAway(before, after, local)) {
+      switchPaused = pauseLocalPlayers()
+      if (switchPaused.length > 0 && Model.blipUndoAllowed(lastBlipUndo, Date.now()))
+        blipWindow.restart()
+      else
+        switchPaused = []
+    } else if (blipWindow.running && Model.sourceStopped(before, after, local)) {
+      blipWindow.stop()
+      lastBlipUndo = Date.now()
+      var players = switchPaused
+      switchPaused = []
+      for (var i = 0; i < players.length; i++) {
+        if (players[i] && players[i].canPlay) players[i].play()
+      }
+      set("playback-source", local, { playback_source: local })
+    }
+  }
+
+  Timer {
+    id: blipWindow
+    interval: Model.BLIP_WINDOW_MS
+    repeat: false
+    onTriggered: root.switchPaused = []
+  }
+
+  // The other half of pauseOnSwitch. A desktop player that starts while
+  // another peer (a phone) still owns playback would make the headset switch
+  // here while the phone keeps playing, and auto-switch then fights over it.
+  // A player reports Playing before its audio reaches the headset, so the
+  // phone is still the source and the pause the daemon sends lands there.
+  function localPlaybackStarted() {
+    if (!pauseOnSwitch || helperPath === "" || session !== "held") return
+    if (!Model.remoteSource(state, state.local_address)) return
+    if (pauseSourceProcess.running) return
+    pauseSourceProcess.command = argv(["--json", "pause-source"])
+    pauseSourceProcess.running = true
+  }
+
+  Variants {
+    model: Mpris.players ? Mpris.players.values : []
+    Connections {
+      required property var modelData
+      target: modelData
+      function onIsPlayingChanged() {
+        if (modelData && modelData.isPlaying) root.localPlaybackStarted()
+      }
     }
   }
 
   // Choosing a playback source is selection-only: while this machine is the
   // one playing, the reported source names the local source, so picking any
   // other peer pauses the local players first. A switch the phone makes
-  // arrives as a state line through applyLine and never touches playback.
+  // arrives as a state line, and applyLine pauses for it (pauseOnSwitch).
   function choosePlaybackSource(value) {
     if (Model.pausesLocalPlayback(value, Model.playbackSource(state))) pauseLocalPlayers()
     set("playback-source", value, { playback_source: value })
@@ -243,7 +316,16 @@ Item {
   // `presenceReleased` false and is never undone here. `hold` does nothing
   // automatically; the manual toggle stands. This is a property change, not a
   // timer, so no new polling is added.
+  //
+  // A session the headset handed to another device (`session_reason` is
+  // "taken") is the exception under either policy: the daemon stepped aside
+  // rather than fight the phone, so it stays released while the headset stays
+  // connected, and a headset that leaves and comes back starts fresh.
   onPresentChanged: {
+    if (present && session === "released" && state.session_reason === "taken") {
+      reclaim()
+      return
+    }
     if (sessionPolicy !== "on-demand") return
     if (!present) {
       if (session === "released") return
@@ -264,7 +346,9 @@ Item {
     var text = String(line || "").trim()
     if (text === "" || text.charAt(0) !== "{") return
     try {
-      state = JSON.parse(text)
+      var next = JSON.parse(text)
+      if (pauseOnSwitch) followSource(state, next)
+      state = next
       starting = false
       lastError = String(state.error || "")
       changed()
@@ -333,6 +417,17 @@ Item {
       if (exitCode === 0) root.lastError = ""
       else root.refresh()
     }
+  }
+
+  // Fire-and-forget: the daemon re-checks the source before sending, and the
+  // watch stream carries whatever follows, so nothing here touches lastError —
+  // a pause that was not needed is not a fault worth showing.
+  Process {
+    id: pauseSourceProcess
+    running: false
+    clearEnvironment: true
+    environment: root.helperEnvironment
+    command: []
   }
 
   Process {
