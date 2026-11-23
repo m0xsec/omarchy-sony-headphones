@@ -108,10 +108,12 @@ in `~/.config/omarchy/shell.json`:
 | `logging` | `errors` | Starting log level for the helper: `errors`, `all` or `off` |
 | `sessionPolicy` | `hold` | `hold` keeps the one control session; `on-demand` releases it after the idle delay so a phone can take over |
 | `idleSeconds` | `30` | Quiet seconds before an `on-demand` session is released; only used by `on-demand` |
+| `pauseOnSwitch` | `On` | Keep one multipoint device playing: pause this computer when the headphones switch to another device, and pause that device when media starts here |
 
 `sessionPolicy` and `idleSeconds` only make sense once you know what the
 control session is; it is explained under [The control
-session](#the-control-session) below.
+session](#the-control-session) below. `pauseOnSwitch` is explained under
+[Multipoint playback](#multipoint-playback).
 
 ## Headphone controls
 
@@ -164,6 +166,17 @@ Bluetooth range releases the session automatically and its return reclaims it â€
 but only a release the presence signal caused; a release made by hand is never
 undone by a connect event, and `hold` never releases on its own.
 
+The headset can also take the session away. Over multipoint it gives the one
+session to whichever device asks last, so when Sony's Sound Connect app on a
+phone opens it, the headset resets this computer's link while staying connected
+over Bluetooth. The daemon treats that as a hand-off rather than a dropped link:
+it releases the session instead of redialling, which used to snatch it straight
+back and leave the two trading it every few seconds. The row then reads
+`Session: in use by another device`. Any command, or activating the row, takes
+it back; the headset disconnecting and returning reclaims it on its own, under
+either policy. A reset with the headset gone is an ordinary dead link and
+reconnects as before.
+
 The same controls are on the command line and the socket. `session` with no
 arguments reports the policy the running daemon uses; with arguments it changes
 it at runtime:
@@ -181,6 +194,32 @@ Over the control socket these are `{"cmd": "release"}`, `{"cmd": "reclaim"}` and
 omitted on a `session` request. A release is a deliberate hand-off, not an
 error: it sets no error, keeps the last known values, and keeps the cached
 RFCOMM channel, so reclaiming skips discovery.
+
+## Multipoint playback
+
+With a phone and this computer both connected, Android's auto-switch moves the
+headset to whichever device starts playing â€” and if the other one keeps
+playing, the headset is pulled straight back. `pauseOnSwitch` (on by default)
+keeps one device playing at a time:
+
+- **The headset switches to another device.** The headset announces the new
+  playback source; when it moves from this computer to another peer, every
+  local MPRIS player that can pause is paused. Switching back resumes nothing.
+- **Media starts on this computer while another device is playing.** A local
+  player reports Playing before its audio reaches the headset, so the widget
+  sends `pause-source` at once: the daemon asks the headset to pause the
+  current source, and the headset forwards the pause to the phone over AVRCP.
+  The daemon re-checks the source at send time and sends nothing if it is
+  already this computer, so the desktop is never paused by its own start.
+
+Both directions need the control session held: a released session gets no
+source updates, and `pause-source` never reclaims one the phone's app took.
+Picking a playback source in the panel pauses local playback the same way, with
+or without the setting. On the command line:
+
+```bash
+bin/sony-headphones pause-source        # pause the playing peer, unless it is this machine (v2)
+```
 
 ## The command line
 

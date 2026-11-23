@@ -63,7 +63,7 @@ class TestShellLaunch(unittest.TestCase):
 
     def test_every_process_runs_with_the_minimal_environment(self):
         processes = self.source.count("Process {")
-        self.assertEqual(processes, 5)
+        self.assertEqual(processes, 6)
         self.assertEqual(self.source.count("clearEnvironment: true"), processes)
         self.assertEqual(self.source.count("environment: root.helperEnvironment"), processes)
 

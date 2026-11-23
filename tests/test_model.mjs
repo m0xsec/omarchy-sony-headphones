@@ -18,7 +18,8 @@ const source = readFileSync(join(here, "..", "Model.js"), "utf8")
 const names = [
   "MAX_AMBIENT_LEVEL", "LOG_LEVELS", "rowsFor", "hasRow", "supports",
   "eqPresets", "autoPowerOffOptions", "nextLogging", "loggingLabel",
-  "nextMode", "clampLevel", "deviceOptions", "playbackSource", "sessionLabel",
+  "nextMode", "clampLevel", "deviceOptions", "playbackSource", "sessionLabel", "barIcon", "barLabel", "batteryLow",
+  "ICON_HEADPHONES", "ICON_OFF", "switchedAway", "remoteSource",
   "present", "hasState", "SESSION_IDLE_MIN", "SESSION_IDLE_MAX",
   "SESSION_IDLE_DEFAULT", "clampSessionIdle", "settingKeyForRow", "isPending",
   "refusedReason", "refusedSummary", "pausesLocalPlayback", "availabilityFor",
@@ -364,6 +365,9 @@ test("sessionLabel names the control-session state", function() {
   // reports for a bare link, matching initial_state().
   assert.equal(Model.sessionLabel({}), "Session: held")
   assert.equal(Model.sessionLabel(null), "Session: held")
+  assert.equal(Model.sessionLabel({ session: "released", session_reason: "taken" }),
+    "Session: in use by another device")
+  assert.equal(Model.sessionLabel({ session: "released", session_reason: "user" }), "Session: released")
   assert.equal(Model.sessionLabel({ session: "nonsense" }), "Session: held")
 })
 
@@ -484,6 +488,47 @@ test("availabilityFor keeps the XM2 equalizer on SBC or an unknown codec", funct
                      { available: true, reason: "" }, String(codec))
     assert.equal(Model.eqBlockedByCodec(state), false, String(codec))
   }
+})
+
+test("barIcon and barLabel split the bar into a glyph and a battery figure", function() {
+  var state = { connected: true, nc_mode: "noise-cancelling", battery: 81, charging: true }
+  assert.equal(Model.barIcon(state), Model.ICON_HEADPHONES)
+  assert.equal(Model.barLabel(state, true, false), "81%")
+  assert.equal(Model.barLabel(state, false, false), "")
+  assert.equal(Model.barLabel(state, true, true), "")
+  assert.equal(Model.barIcon(null), Model.ICON_OFF)
+  assert.equal(Model.barLabel(null, true, false), "")
+})
+
+test("batteryLow flags 20% and under on a connected headset only", function() {
+  assert.equal(Model.batteryLow({ connected: true, battery: 20 }), true)
+  assert.equal(Model.batteryLow({ connected: true, battery: 21 }), false)
+  assert.equal(Model.batteryLow({ connected: true, battery: null }), false)
+  assert.equal(Model.batteryLow(null), false)
+})
+
+test("switchedAway fires only when playback leaves this machine", function() {
+  var here = "88:D8:2E:78:A9:D2", phone = "74:F4:41:04:15:70", tv = "14:C1:4E:C1:D0:10"
+  var on = function(address) { return { playback_source: address } }
+  assert.equal(Model.switchedAway(on(here), on(phone), here), true)
+  assert.equal(Model.switchedAway(on(here.toLowerCase()), on(phone), here), true)
+  assert.equal(Model.switchedAway(on(phone), on(here), here), false)
+  assert.equal(Model.switchedAway(on(phone), on(tv), here), false)
+  assert.equal(Model.switchedAway(on(here), on(here), here), false)
+  // A gap in the report (no source yet, or a released session) is not a switch.
+  assert.equal(Model.switchedAway(on(here), on(null), here), false)
+  assert.equal(Model.switchedAway(null, on(phone), here), false)
+  // Without knowing our own address nothing can be told apart.
+  assert.equal(Model.switchedAway(on(here), on(phone), null), false)
+})
+
+test("remoteSource is another peer owning playback", function() {
+  var here = "88:D8:2E:78:A9:D2", phone = "74:F4:41:04:15:70"
+  assert.equal(Model.remoteSource({ playback_source: phone }, here), true)
+  assert.equal(Model.remoteSource({ playback_source: here.toLowerCase() }, here), false)
+  assert.equal(Model.remoteSource({ playback_source: null }, here), false)
+  assert.equal(Model.remoteSource({ playback_source: phone }, null), false)
+  assert.equal(Model.remoteSource(null, here), false)
 })
 
 if (failures > 0) {

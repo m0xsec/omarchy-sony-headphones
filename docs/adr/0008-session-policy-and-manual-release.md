@@ -79,3 +79,23 @@ the fallback when the Bluetooth service is unavailable.
 - The demo stand-in keeps its values across a release/reclaim the way a real
   headset's flash does, so the whole lifecycle is exercisable without
   hardware.
+
+## Amendment — a session taken by another device is not fought over
+
+Over multipoint the headset gives its one control session to whichever device
+asks last, and signals it by resetting our RFCOMM link (`ECONNRESET`) while
+the headset itself stays connected. Under `hold` the daemon treated that as a
+dead link and reconnected; the phone's app did the same, and the two traded
+the session every 10-20 seconds — fast enough to defeat `STABLE_AFTER`, since
+each link lived just long enough to reset the backoff.
+
+A reset on a background read or poll (`Daemon.link_failed`) now asks BlueZ,
+fresh, whether the headset is still connected (`headset_present`). If it is,
+the session is released with `session_reason` `taken` rather than redialled;
+the panel says `Session: in use by another device`. Any command or `reclaim`
+takes it back, exactly as for a manual release, and the widget reclaims it
+automatically when the headset disconnects and returns, under either policy.
+A reset with the headset gone, and every other error, still reconnects.
+Commands the user issues are unaffected: `with_link` keeps its own
+reconnect-and-retry, because a command is a deliberate request for the
+session.

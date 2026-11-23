@@ -217,12 +217,31 @@ function playbackSource(state) {
 // report the active source's address; while this machine is the one playing that
 // address names the local source, so choosing any other peer is switching
 // playback away and the local players should pause. Selection-only: consulted
-// when the user picks a source, never on a state line, so a switch the phone
-// makes does not touch local playback.
+// when the user picks a source; a switch the phone makes is `switchedAway`.
 function pausesLocalPlayback(chosen, current) {
   var target = String(chosen || "").trim().toLowerCase()
   if (!target) return false
   return target !== String(current || "").trim().toLowerCase()
+}
+
+// Whether playback just moved from this machine to another peer: the reported
+// source was `local` and is now some other device. A switch between two other
+// peers, or toward this machine, is not one. Used on state lines, so a switch
+// the phone makes (Android's auto-switch) pauses the desktop the same way
+// picking the phone in the panel does.
+function switchedAway(before, after, local) {
+  var here = String(local || "").trim().toLowerCase()
+  if (!here) return false
+  var was = String(playbackSource(before) || "").trim().toLowerCase()
+  var now = String(playbackSource(after) || "").trim().toLowerCase()
+  return was === here && now !== "" && now !== here
+}
+
+// Whether another peer, not this machine, owns playback right now.
+function remoteSource(state, local) {
+  var here = String(local || "").trim().toLowerCase()
+  var source = String(playbackSource(state) || "").trim().toLowerCase()
+  return here !== "" && source !== "" && source !== here
 }
 
 function modeLabel(mode) {
@@ -291,6 +310,10 @@ function clampSessionIdle(value) {
 
 function sessionLabel(state) {
   var session = state && state.session
+  // The headset handed the session to another device (a phone on
+  // multipoint), and the daemon stepped aside rather than fight for it.
+  if (session === "released" && state.session_reason === "taken")
+    return "Session: in use by another device"
   return SESSION_LABELS[session] || SESSION_LABELS.held
 }
 
@@ -315,11 +338,23 @@ function heroMeta(state) {
   return parts.join(" · ")
 }
 
-function barText(state, showBattery, vertical) {
-  var icon = modeIcon(state ? state.nc_mode : null, hasState(state))
-  if (!showBattery || vertical || !hasState(state)) return icon
-  var battery = batteryText(state.battery, false)
-  return battery === "" ? icon : battery + " " + icon
+// The bar button draws its text as a single icon glyph scaled to the icon
+// slot, so the battery reading goes in its separate label instead.
+function barIcon(state) {
+  return modeIcon(state ? state.nc_mode : null, hasState(state))
+}
+
+// At or under this the bar's battery figure turns the urgent colour.
+var LOW_BATTERY = 20
+
+function batteryLow(state) {
+  if (!hasState(state) || state.battery === null || state.battery === undefined) return false
+  return state.battery <= LOW_BATTERY
+}
+
+function barLabel(state, showBattery, vertical) {
+  if (!showBattery || vertical || !hasState(state)) return ""
+  return batteryText(state.battery, false)
 }
 
 function tooltip(state) {

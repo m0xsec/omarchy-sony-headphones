@@ -154,8 +154,20 @@ family, not the usual table 1.
 audio, read from the trailing status byte of the device list
 (`state["playback_source"]`). Choosing a peer other than the reported source
 pauses every local MPRIS player that can pause
-(`Model.pausesLocalPlayback`, `Service.choosePlaybackSource`): selection-only,
-so a switch the phone makes never touches local playback.
+(`Model.pausesLocalPlayback`, `Service.choosePlaybackSource`). With
+`pauseOnSwitch`, a switch the headset makes on its own does too: each state
+line is compared with the last, and a source that moves off this machine
+(`Model.switchedAway`, against `state["local_address"]` from
+`adapter_address`) pauses local playback in `Service.applyLine`.
+
+**Remote playback control** — the v2 `PLAY_SET_STATUS` request
+(`v2_pause_source_request`: `A4 01 00 01`, inquired type "playback control",
+enable, pause), which the headset forwards over AVRCP to the current playback
+source. A local MPRIS player that starts while another peer owns playback
+(`Service.localPlaybackStarted`, `Model.remoteSource`) sends `pause-source`;
+`Daemon.pause_source` uses only a held link and re-checks the source at send
+time, sending nothing when it is already this machine. See
+[ADR 0010](../adr/0010-multipoint-playback-coordination.md).
 
 **DSEE Extreme** — Sony's upscaling of compressed audio. On v1 it is read and
 written through the shared boolean table (`BOOL_SETTINGS["dsee"]`); on v2 it
@@ -370,6 +382,15 @@ unavailable. The session row (`Model.sessionLabel`, `Model.rowsFor` offering
 a write attempted while released is allowed: the daemon reclaims first, which
 is the "any command reclaims" promise made visible.
 
+The headset can end the session too. A failure on the run loop's read or on
+the poll goes through `Daemon.link_failed`: a peer reset (`ECONNRESET`) while
+BlueZ still reports the headset connected (`headset_present`, read fresh) means
+another device took the session, so it is released with `session_reason`
+`taken` rather than redialled, and `Model.sessionLabel` reads `Session: in use
+by another device`. `Service` reclaims such a session when presence returns,
+under either policy. Anything else, and every failure inside a client command
+(`with_link`), is an ordinary dead link.
+
 The daemon backs off instead of fighting the phone for that one session:
 `Daemon.retry_delay` climbs from `RETRY_MIN` (2 s) to `RETRY_MAX` (30 s); a
 link that held past `STABLE_AFTER` (10 s) resets the delay, one that died young
@@ -400,8 +421,10 @@ fans the same bytes out to every subscriber (at most 16, one second each — a
 subscriber that stops reading is dropped rather than blocking the rest), and
 skips a state identical to the last emitted one. Every command the socket
 accepts — `set`, `cycle`, `refresh`, `power-off`, `logging`, `release`,
-`reclaim`, `session` — reaches the link through `with_link`, except `logging`,
-`release` and the `session` read, which belong to the daemon and need no link.
+`reclaim`, `session`, `pause-source` — reaches the link through `with_link`,
+except `logging`, `release` and the `session` read, which belong to the daemon
+and need no link, and `pause-source`, which uses the held link only and never
+reconnects.
 The connected-device list behind `find_device` is cached in memory for two
 seconds, collapsing one operation's several lookups into a single scan.
 
@@ -472,6 +495,13 @@ without a new ADR.
   fallback) and only tab-indented `UUID:` lines steer discovery. Link-layer
   eavesdropping, impersonation and firmware flaws are out of scope and said so
   plainly.
+
+- **[0010 — Keep one multipoint peer playing at a
+  time](../adr/0010-multipoint-playback-coordination.md).** `pauseOnSwitch`
+  pauses local players when the headset moves playback to another peer, and
+  asks the headset to pause that peer (`PLAY_SET_STATUS`) when a local player
+  starts. Only a held session is used, and the source is re-checked at send
+  time so the desktop never pauses itself.
 
 ## Tests
 
