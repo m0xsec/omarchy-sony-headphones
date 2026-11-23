@@ -158,7 +158,14 @@ pauses every local MPRIS player that can pause
 `pauseOnSwitch`, a switch the headset makes on its own does too: each state
 line is compared with the last, and a source that moves off this machine
 (`Model.switchedAway`, against `state["local_address"]` from
-`adapter_address`) pauses local playback in `Service.applyLine`.
+`adapter_address`) pauses local playback in `Service.followSource`.
+That pause is provisional: the headset also reports the source's own play
+status (`PLAY_NTFY_STATUS`, `0xA5`, decoded into `state["source_playing"]`), and
+a source that reports a pause within `Model.BLIP_WINDOW_MS` (6 s,
+`Model.sourceStopped`) was a blip — a phone's muted autoplay — so the players
+`pauseLocalPlayers` returned resume and the source is switched back here. One
+undo per `Model.BLIP_COOLDOWN_MS` (30 s, `Model.blipUndoAllowed`): a peer that
+keeps taking the headset is playing for real.
 
 **Remote playback control** — the v2 `PLAY_SET_STATUS` request
 (`v2_pause_source_request`: `A4 01 00 01`, inquired type "playback control",

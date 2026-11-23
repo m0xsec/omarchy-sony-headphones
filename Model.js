@@ -237,6 +237,31 @@ function switchedAway(before, after, local) {
   return was === here && now !== "" && now !== here
 }
 
+// A peer that takes the headset and reports a pause within this was a blip —
+// a phone's autoplay on unlock plays 1-5 s at a time on a WH-1000XM6 — so the
+// local players paused for it resume. Past it, the switch was real playback.
+var BLIP_WINDOW_MS = 6000
+
+// At most one blip is undone in this long. A peer that takes the headset again
+// and again is playing for real (a phone's video feed autoplaying clip after
+// clip), and resuming here each time feeds auto-switch a fight.
+var BLIP_COOLDOWN_MS = 30000
+
+// Whether a provisional pause may be undone, given when the last undo was
+// (milliseconds, 0 for never) and the time now.
+function blipUndoAllowed(lastUndo, now) {
+  return !lastUndo || now - lastUndo >= BLIP_COOLDOWN_MS
+}
+
+// The peer that owns playback just reported it stopped: same remote source
+// before and after, and `source_playing` went to false on this line.
+function sourceStopped(before, after, local) {
+  if (!remoteSource(after, local) || !before) return false
+  var was = String(playbackSource(before) || "").trim().toLowerCase()
+  var now = String(playbackSource(after) || "").trim().toLowerCase()
+  return was === now && before.source_playing !== false && after.source_playing === false
+}
+
 // Whether another peer, not this machine, owns playback right now.
 function remoteSource(state, local) {
   var here = String(local || "").trim().toLowerCase()

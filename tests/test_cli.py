@@ -264,10 +264,12 @@ class TestPresenceWiring(unittest.TestCase):
         self.assertRegex(self.presence_handler(), r'session\s*===\s*"released"')
 
     def test_presence_adds_no_timer(self):
-        # Presence is a property change, so the watcher's restart timer stays
-        # the only timer in the file.
-        self.assertEqual(self.source.count("Timer {"), 1)
+        # Presence is a property change: the only timers in the file are the
+        # watcher's restart timer and the multipoint blip window, neither of
+        # which presence touches.
+        self.assertEqual(self.source.count("Timer {"), 2)
         self.assertRegex(self.source, r"id:\s*restartTimer[\s\S]{0,80}interval:\s*5000")
+        self.assertRegex(self.source, r"id:\s*blipWindow[\s\S]{0,80}interval:\s*Model\.BLIP_WINDOW_MS")
         self.assertNotRegex(self.presence_handler(), r"Timer\s*\{")
 
 

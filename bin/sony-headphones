@@ -388,9 +388,17 @@ V2_PERI_SUB_SOURCE_SWITCH = 0x01
 # [0xA4, inquired type 0x01, EnableDisable 0x00 = enable, control]. The headset
 # forwards the control over AVRCP to whichever multipoint peer is the current
 # playback source — confirmed on a WH-1000XM6 pausing a phone. Table 1 frames.
+V2_PLAY_RET_STATUS = 0xA3
 V2_PLAY_SET_STATUS = 0xA4
+V2_PLAY_NTFY_STATUS = 0xA5
 V2_PLAY_TYPE_PLAYBACK_CONTROL = 0x01
 V2_PLAY_CONTROL_PAUSE = 0x01
+# The status the current source reports (libmdr's PlaybackStatus), at byte 3 of
+# a PLAY_RET/NTFY_STATUS: [0xA5, type 0x01, enable, status, music/call]. Note
+# PAUSE is 0x02 here but 0x01 as a control. A WH-1000XM6 sends one on every
+# play and pause of the active peer, including a phone's muted autoplay.
+V2_PLAY_STATUS_PLAY = 0x01
+V2_PLAY_STATUS_STOPPED = (0x02, 0x03)
 
 
 def v2_pause_source_request() -> tuple[int, bytes]:
@@ -1058,6 +1066,9 @@ def initial_state() -> dict:
         # filled from the PERIPHERAL device-list family on protocol v2.
         "devices": None,
         "playback_source": None,
+        # Whether the current playback source says it is playing (v2 only):
+        # True, False, or None until the headset reports it.
+        "source_playing": None,
         "bgm_room_size": None,
         "bgm_subtype": None,
         "bgm_enabled": False,
@@ -1236,6 +1247,14 @@ def apply_payload_v2(state: dict, msg_type: int, payload: bytes) -> bool:
         # or interpreted beyond the length check.
         if code in (VOICE_NOTIFICATIONS_RET, VOICE_NOTIFICATIONS_NOTIFY) and len(payload) >= 4:
             state["voice_notifications"] = payload[2] == 0x00
+        return state != before
+
+    if code in (V2_PLAY_RET_STATUS, V2_PLAY_NTFY_STATUS) and len(payload) >= 4 \
+            and payload[1] == V2_PLAY_TYPE_PLAYBACK_CONTROL:
+        if payload[3] == V2_PLAY_STATUS_PLAY:
+            state["source_playing"] = True
+        elif payload[3] in V2_PLAY_STATUS_STOPPED:
+            state["source_playing"] = False
         return state != before
 
     # v2 still reads firmware through the v1 opcode, so the branch has to live

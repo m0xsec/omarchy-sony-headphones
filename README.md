@@ -160,10 +160,13 @@ Connect app opening it), the daemon steps aside instead of taking it back, and
 the row reads `Session: in use by another device`.
 
 With multipoint, `pauseOnSwitch` keeps one device playing at a time, which is
-what stops Android's auto-switch from bouncing the headset between the phone and
-this computer: when the headphones switch to the phone, media here pauses; when
-media starts here while the phone is still playing, the plugin asks the headset
-to pause the phone. Both directions need the session held.
+what stops the headset bouncing between the phone and this computer: when the
+headphones switch to the phone, media here pauses (and resumes if the phone
+stops within a few seconds, as a muted autoplay on unlock does); when media
+starts here while the phone is still playing, the plugin asks the headset to
+pause the phone. Both directions need the session held. If the headset keeps
+switching with nothing playing, turn off Google's **Audio switch** for the
+headphones on the phone; see [Troubleshooting](docs/wiki/usage.md#the-headset-keeps-switching-between-the-phone-and-this-computer).
 
 ## The command line
 

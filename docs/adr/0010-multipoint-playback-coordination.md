@@ -34,7 +34,18 @@ A `pauseOnSwitch` setting, on by default, keeps one peer playing:
   every local MPRIS player that can pause is paused (`Service.applyLine`). The
   daemon stamps its own adapter address on every state line
   (`adapter_address`, `local_address`), because the device list names this
-  machine like any other peer. Nothing resumes when the source comes back.
+  machine like any other peer. The pause is provisional, because a phone
+  reports "playing" for muted autoplay too (a video feed on unlock played 1-5 s
+  at a time). The headset also announces the source's own play status
+  (`PLAY_NTFY_STATUS`, `0xA5`: `[0xA5, 0x01, enable, status, music/call]`,
+  status `0x01` play, `0x02` pause, `0x03` stop; `state["source_playing"]`). If
+  the source reports a pause within 6 seconds, the players that were paused
+  resume and the source is switched back here. At most one undo per 30 seconds:
+  a peer that keeps taking the headset is playing for real, and resuming each
+  time would only give it something to fight. A first attempt that waited 6
+  seconds before pausing at all was dropped: with both devices streaming, the
+  headset flipped back within 3-4 seconds, so the wait never ended and the
+  desktop never paused.
 - **Toward this machine.** A local player that starts while another peer owns
   playback (`Service.localPlaybackStarted`, `Model.remoteSource`) sends the
   `pause-source` command. A player reports Playing before its audio reaches the
@@ -56,6 +67,12 @@ the panel, because a pause that was not needed is not a fault.
   changes and sends no pauses; the setting then does nothing, by design.
 - Pausing is all-or-nothing on this machine: every player that can pause is
   asked, including one playing to another output, the same as a panel pick.
+- A brief blip costs a few seconds of desktop audio rather than leaving it
+  paused, and only the first blip in 30 seconds is undone.
+- Some swapping is outside the plugin's reach. Google Play Services' Fast Pair
+  "Audio switch" kept taking the headset back for a phone every few seconds,
+  with nothing playing and the daemon idle; turning it off on the phone was the
+  fix. The usage guide's troubleshooting section says so.
 - The phone side is confirmed on one model and firmware. Another v2 device that
   ignores `PLAY_SET_STATUS` simply does not pause the phone; nothing else
   changes.

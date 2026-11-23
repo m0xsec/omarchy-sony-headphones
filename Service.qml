@@ -172,12 +172,58 @@ Item {
   // Pause the local media players via MPRIS, so switching the headphones to
   // another peer does not leave this machine playing to no one. Reads the
   // players at call time; only players that can pause are asked.
+  // Returns the players that were playing and were asked to pause, so a
+  // provisional pause (followSource) can resume exactly those.
   function pauseLocalPlayers() {
     var players = Mpris.players ? Mpris.players.values : []
+    var paused = []
     for (var i = 0; i < players.length; i++) {
       var player = players[i]
-      if (player && player.canPause) player.pause()
+      if (!player || !player.canPause) continue
+      if (player.isPlaying) paused.push(player)
+      player.pause()
     }
+    return paused
+  }
+
+  // The headset moved playback off this machine on its own (Android's
+  // auto-switch): pause here at once, or the desktop keeps streaming and the
+  // headset is pulled straight back, every few seconds, for as long as both
+  // play. But a phone reports "playing" for muted autoplay too — a video feed
+  // on unlock plays a second or few at a time — so the pause is provisional:
+  // if the phone stops within blipWindow, the players this paused resume and
+  // the source is handed back here. Past the window the pause stands. Only one
+  // blip is undone per BLIP_COOLDOWN_MS: a phone that keeps grabbing the
+  // headset every few seconds is playing for real, and resuming the desktop
+  // each time would only feed auto-switch another device to fight with.
+  property var switchPaused: []
+  property double lastBlipUndo: 0
+
+  function followSource(before, after) {
+    var local = after.local_address
+    if (Model.switchedAway(before, after, local)) {
+      switchPaused = pauseLocalPlayers()
+      if (switchPaused.length > 0 && Model.blipUndoAllowed(lastBlipUndo, Date.now()))
+        blipWindow.restart()
+      else
+        switchPaused = []
+    } else if (blipWindow.running && Model.sourceStopped(before, after, local)) {
+      blipWindow.stop()
+      lastBlipUndo = Date.now()
+      var players = switchPaused
+      switchPaused = []
+      for (var i = 0; i < players.length; i++) {
+        if (players[i] && players[i].canPlay) players[i].play()
+      }
+      set("playback-source", local, { playback_source: local })
+    }
+  }
+
+  Timer {
+    id: blipWindow
+    interval: Model.BLIP_WINDOW_MS
+    repeat: false
+    onTriggered: root.switchPaused = []
   }
 
   // The other half of pauseOnSwitch. A desktop player that starts while
@@ -301,11 +347,7 @@ Item {
     if (text === "" || text.charAt(0) !== "{") return
     try {
       var next = JSON.parse(text)
-      // The headset moved playback off this machine on its own (Android's
-      // auto-switch, or the phone simply starting to play): pause here too,
-      // or the desktop keeps playing and the headset switches straight back.
-      if (pauseOnSwitch && Model.switchedAway(state, next, next.local_address))
-        pauseLocalPlayers()
+      if (pauseOnSwitch) followSource(state, next)
       state = next
       starting = false
       lastError = String(state.error || "")

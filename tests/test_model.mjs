@@ -19,7 +19,7 @@ const names = [
   "MAX_AMBIENT_LEVEL", "LOG_LEVELS", "rowsFor", "hasRow", "supports",
   "eqPresets", "autoPowerOffOptions", "nextLogging", "loggingLabel",
   "nextMode", "clampLevel", "deviceOptions", "playbackSource", "sessionLabel", "barIcon", "barLabel", "batteryLow",
-  "ICON_HEADPHONES", "ICON_OFF", "switchedAway", "remoteSource",
+  "ICON_HEADPHONES", "ICON_OFF", "switchedAway", "remoteSource", "sourceStopped", "BLIP_WINDOW_MS", "BLIP_COOLDOWN_MS", "blipUndoAllowed",
   "present", "hasState", "SESSION_IDLE_MIN", "SESSION_IDLE_MAX",
   "SESSION_IDLE_DEFAULT", "clampSessionIdle", "settingKeyForRow", "isPending",
   "refusedReason", "refusedSummary", "pausesLocalPlayback", "availabilityFor",
@@ -529,6 +529,31 @@ test("remoteSource is another peer owning playback", function() {
   assert.equal(Model.remoteSource({ playback_source: null }, here), false)
   assert.equal(Model.remoteSource({ playback_source: phone }, null), false)
   assert.equal(Model.remoteSource(null, here), false)
+})
+
+test("the blip window covers a phone's autoplay bursts", function() {
+  assert.ok(Model.BLIP_WINDOW_MS > 5000)
+})
+
+test("blipUndoAllowed undoes one blip per cooldown", function() {
+  assert.equal(Model.BLIP_COOLDOWN_MS, 30000)
+  assert.equal(Model.blipUndoAllowed(0, 1000), true)
+  assert.equal(Model.blipUndoAllowed(100000, 100000 + 29999), false)
+  assert.equal(Model.blipUndoAllowed(100000, 100000 + 30000), true)
+})
+
+test("sourceStopped fires once, when the remote source reports a pause", function() {
+  var here = "88:D8:2E:78:A9:D2", phone = "74:F4:41:04:15:70"
+  var playing = { playback_source: phone, source_playing: true }
+  var paused = { playback_source: phone, source_playing: false }
+  assert.equal(Model.sourceStopped(playing, paused, here), true)
+  assert.equal(Model.sourceStopped(paused, paused, here), false)
+  assert.equal(Model.sourceStopped(playing, playing, here), false)
+  assert.equal(Model.sourceStopped({ playback_source: here, source_playing: true },
+                                   { playback_source: here, source_playing: false }, here), false)
+  // A pause that arrives with a switch to another peer is not this peer stopping.
+  assert.equal(Model.sourceStopped({ playback_source: "14:C1:4E:C1:D0:10", source_playing: true },
+                                   paused, here), false)
 })
 
 if (failures > 0) {

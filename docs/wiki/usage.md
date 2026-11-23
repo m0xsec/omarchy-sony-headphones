@@ -197,14 +197,20 @@ RFCOMM channel, so reclaiming skips discovery.
 
 ## Multipoint playback
 
-With a phone and this computer both connected, Android's auto-switch moves the
-headset to whichever device starts playing — and if the other one keeps
-playing, the headset is pulled straight back. `pauseOnSwitch` (on by default)
-keeps one device playing at a time:
+With a phone and this computer both connected, the headset moves to whichever
+device starts playing — and if the other one keeps playing, the headset is
+pulled straight back. `pauseOnSwitch` (on by default) keeps one device playing
+at a time:
 
 - **The headset switches to another device.** The headset announces the new
   playback source; when it moves from this computer to another peer, every
-  local MPRIS player that can pause is paused. Switching back resumes nothing.
+  local MPRIS player that can pause is paused at once, so the two do not trade
+  the headset. The pause is provisional: a phone also reports "playing" for a
+  muted autoplay clip, such as a video feed on unlock, so if the phone reports
+  a pause within 6 seconds the players that were paused resume and the headset
+  is switched back here. Only one such undo happens per 30 seconds — a phone
+  that keeps taking the headset is playing for real — and past the 6 seconds
+  the pause stands. Switching back otherwise resumes nothing.
 - **Media starts on this computer while another device is playing.** A local
   player reports Playing before its audio reaches the headset, so the widget
   sends `pause-source` at once: the daemon asks the headset to pause the
@@ -304,6 +310,27 @@ releases automatically after the idle delay, so the phone can take over on its
 own. The panel always shows which state the session is in. The full behaviour
 is in [architecture.md](architecture.md#the-session-lifecycle-and-the-presence-signal)
 and [../adr/0008-session-policy-and-manual-release.md](../adr/0008-session-policy-and-manual-release.md).
+
+### The headset keeps switching between the phone and this computer
+
+If the playback source flips every few seconds even with nothing playing on
+either side, the phone is the one claiming the headset, and no setting here can
+stop it. Two things cause it:
+
+- **Google's Audio switch.** Google Play Services moves Fast Pair headphones
+  between devices on its own, and on a WH-1000XM6 it kept taking the headset
+  back every few seconds. Turn it off for the headset: on most phones,
+  **Settings → Connected devices → ⚙ next to the headphones → Audio switch**;
+  on a Samsung Galaxy, search Settings for "Audio switch" or "Fast Pair". This
+  is Google's feature, not Samsung's Auto switch, which only covers Galaxy
+  Buds. Turning it off fixed the swapping on a Galaxy S26 Ultra.
+- **An app that keeps reporting playback.** A video feed autoplaying clips, or
+  a browser tab holding an audio stream open while paused, looks like playback
+  to the headset. Pause or close it.
+
+To tell whether this plugin is involved, set the log level to `all`: during the
+swapping the log shows any `set playback-source` or `pause-source` the plugin
+sent, and if there are none, the plugin is idle.
 
 ### Logs
 
