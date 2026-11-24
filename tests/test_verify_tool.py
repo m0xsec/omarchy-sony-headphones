@@ -191,6 +191,18 @@ class TestVerifyToolDemoV2(_DemoDaemonTestCase):
         self.assertIn("every changed value was restored", done.stdout)
 
 
+class TestVerifyToolDemoXM5(TestVerifyToolDemoV2):
+    """The WH-1000XM5 stand-in: classic equalizer, touch panel behind an alert."""
+
+    DEMO = "xm5"
+
+    def test_the_xm5_run_covers_its_own_controls(self):
+        done = self.run_tool("eq", "touch-sensor", "connection-quality")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(touched_controls(done.stdout), {"eq", "touch-sensor", "connection-quality"})
+        self.assertNotRegex(done.stdout, r"(?m)^\S+\s+(IGNORED|FAILED|REFUSED)\b")
+
+
 class _FakeDevice:
     """A programmable stand-in for the daemon's state, driven through tool.call.
 

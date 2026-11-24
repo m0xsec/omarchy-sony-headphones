@@ -323,8 +323,15 @@ class TestV2Replies(unittest.TestCase):
         self.apply([0x49, 0x01, 0x01, 0x01], sonyhp.MSG_COMMAND_2)
         self.assertIs(self.state["voice_notifications"], False)
 
-    def test_a_short_voice_guidance_reply_is_ignored(self):
-        self.assertFalse(self.apply([0x47, 0x01, 0x00], sonyhp.MSG_COMMAND_2))
+    def test_the_three_byte_voice_guidance_notification_is_read(self):
+        # A WH-1000XM5 announces a write as `49 01 <value>`, without the
+        # trailing byte its GET reply carries (gabamnml PR #3 capture).
+        self.assertTrue(self.apply([0x49, 0x01, 0x01], sonyhp.MSG_COMMAND_2))
+        self.assertIs(self.state["voice_notifications"], False)
+
+    def test_a_voice_guidance_reply_without_a_value_is_ignored(self):
+        self.assertFalse(self.apply([0x47, 0x01], sonyhp.MSG_COMMAND_2))
+        self.assertFalse(self.apply([0x47, 0x01, 0x07], sonyhp.MSG_COMMAND_2))
         self.assertIsNone(self.state["voice_notifications"])
 
     def test_garbage_is_ignored(self):

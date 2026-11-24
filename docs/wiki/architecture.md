@@ -116,22 +116,42 @@ each refuses the other's exclusive keys outright (`V1_ONLY_SETTINGS`,
 (`NC_MODES`). The panel and the earcup button walk the same cycle through
 `next_nc_mode` / `Model.nextMode`.
 
+**Support lists** — what a v2 device says it implements: `06 00` on each
+message table, answered `07 00 <count>` and that many (function, priority)
+pairs (`v2_support_requests`, `state["functions"]`). Read during negotiation
+(`Link.read_support`), they settle the ambient-sound, equalizer, battery and
+connection-quality dialects without probing and withhold the features whose
+codes a capture pins (`V2_FN_FEATURES`, `refine_v2_features`). A device that
+answers no list is probed as before. See
+[ADR 0011](../adr/0011-v2-support-lists-refine-the-model-table.md).
+
+**General-settings slots** — the v2 functions `0xd1`–`0xd4`, numbered
+settings whose meaning varies by model. Each listed slot is asked its name
+(`d0 <slot> 00`); the one named `TOUCH_PANEL_SETTING` is the touch panel
+(`state["touch_slot"]`: `0xd1` on the WH-1000XM5, `0xd3` on the WH-1000XM6),
+read and written inverted through the `0xd6` family.
+
 **Ambient-sound subtype** — the v2 dialect code under which ambient-sound
 control is read and written (`V2_ASC_SUBTYPES`). Firmware answers different
 shapes — `0x19` for the current noise-adaptation parameter, plus the older
-`0x17`, `0x15` and `0x22` — so the device is asked which it speaks and writes
-echo the subtype it answered under (`Link.select_asc_subtype`).
+`0x17`, `0x15` and `0x22`. A device that lists support function `0x6d`
+(WH-1000XM6) speaks `0x19` and one that lists `0x6b` (WH-1000XM5) speaks
+`0x17`; otherwise the device is asked which it speaks. Writes echo the subtype
+it answered under (`Link.select_asc_subtype`).
 
 **Equalizer preset** — a named tone curve sent as a one-byte code
-(`EQ_PRESETS` for v1, `V2_EQ_PRESETS` for v2). The v1 table has the classic
-names plus `manual`, `custom-1` and `custom-2`; the v2 table is Off, Heavy,
-Clear, Hard, Soft and Custom. The v2 codes are hardware-confirmed on the
-WH-1000XM6 only; the other v2 models are offered the same table without a
-hardware read.
+(`EQ_PRESETS` for v1 and the v2 classic dialect, `V2_EQ_PRESETS` for the v2
+ten-band dialect). The v1 table has the classic names plus `manual`,
+`custom-1` and `custom-2`; the ten-band table is Off, Heavy, Clear, Hard, Soft
+and Custom, hardware-confirmed on the WH-1000XM6. The WH-1000XM5 keeps the
+classic codes (capture, gabamnml PR #3).
 
-**Equalizer bands** — the custom curve values. v1 carries a clear-bass band
-plus five bands in the range -10..10 (`eq_bands_request`); v2 carries ten bands
-in the range -6..6 (`v2_eq_bands_request`).
+**Equalizer dialect** — which equalizer a v2 device has
+(`state["eq_dialect"]`), read from the reply's band count rather than its
+subtype: six values are `"classic"` (clear bass plus five bands, -10..10,
+`v2_eq_classic_bands_request`; WH-1000XM5), ten are `"ten-band"` (-6..6,
+`v2_eq_bands_request`; WH-1000XM6). v1 carries the classic layout
+(`eq_bands_request`).
 
 **Listening mode** — the mode the vendor app reports on v2: `"standard"`,
 `"background-music"` or `"cinema"`. It is derived from two independent flags,
@@ -184,7 +204,17 @@ unlike connection quality it is not inverted: `0x01` means on.
 **Connection quality** — the v2-only trade between sound quality (LDAC) and a
 stable connection (SBC) (`v2_connection_quality_request`). The wire value names
 the compromise, not the feature, so the helper flips the sense on the way in
-and out.
+and out. It rides audio subtype `0x00` on a device that lists support function
+`0xe1` (WH-1000XM5) and `0x02` otherwise (WH-1000XM6); the XM6 answers both, so
+the parser reads only the chosen one (`v2_connection_subtype`).
+
+**Touch-panel confirmation** — switching a v2 touch panel off is refused unless
+fixed-message alerts are on (`94 00 00`); the headphones then ask
+(`99 00 0a|0b ..`) and act on the answer (`98 00 <alert> 01`). The helper
+answers only that alert, only while `apply_setting` is carrying a write that
+enabled alerts (`alert_confirmation`, `Link.confirm_alerts`). Alert `0x0b` says
+the headphones will reconnect to apply it; the drop is raised as
+`Reconnecting`, which the daemon treats as done and does not retry.
 
 **Speak-to-Chat** — the feature that pauses playback when you start talking,
 with sensitivity, resume timeout and (v1 only) voice focus. On v2 it is
@@ -197,7 +227,9 @@ has its own shorter shape, confirmed on a WH-1000XM6 (firmware 3.1.5, capture
 probe `0e 46 01 01` answered by `47 01 00 03`): GET `46 01 01`, SET
 `48 01 VV` inverted (`0x00` = on), 4-byte RET `0x47` / NOTIFY `0x49` with the
 value at index 2 and an unknown trailing byte at index 3. Never reuse the v1
-shape on v2. Scope is WH-1000XM5/XM6 only for now.
+shape on v2. The notification after a write may drop the trailing byte
+(`49 01 VV` on a WH-1000XM5), so only the value byte is required. Scope is
+WH-1000XM5/XM6 only for now.
 
 **Transport** — the bytes-moving seam behind a `Link` (`Transport`).
 `RfcommTransport` is the real radio; `DemoTransport` is a stand-in whose other
@@ -509,6 +541,13 @@ without a new ADR.
   asks the headset to pause that peer (`PLAY_SET_STATUS`) when a local player
   starts. Only a held session is used, and the source is re-checked at send
   time so the desktop never pauses itself.
+
+- **[0011 — v2 support lists refine the model
+  table](../adr/0011-v2-support-lists-refine-the-model-table.md).** A v2
+  device's own support lists and named setting slots pick its dialects and
+  withhold the controls it does not list; the touch panel is offered only where
+  a slot names itself, and the one alert its off switch raises is the only one
+  the helper ever answers.
 
 ## Tests
 

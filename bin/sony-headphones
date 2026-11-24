@@ -401,6 +401,84 @@ V2_PLAY_STATUS_PLAY = 0x01
 V2_PLAY_STATUS_STOPPED = (0x02, 0x03)
 
 
+# Support-function lists. A v2 device answers `06 00` on each message table
+# with `07 00 <count>` and that many (function, priority) pairs: what it
+# implements, one list per table. The codes below are the ones whose meaning
+# is pinned by a hardware capture — a WH-1000XM5 on firmware 2.5.1 (via
+# gabamnml/omarchy-sony-headphones#3) and a WH-1000XM6 on firmware 3.1.5 — and
+# they are used two ways: to pick a family's dialect without probing, and to
+# withhold a control the device does not list. A feature with no pinned code
+# is left to the per-model table, because an absent mapping must never hide a
+# control that works: the XM6 lists voice guidance as 0x42 where the XM5
+# lists 0x41, and a list read with only one of them in mind would drop it.
+V2_SUPPORT_GET = 0x06
+V2_SUPPORT_RET = 0x07
+
+V2_FN_BATTERY = 0x20
+V2_FN_BATTERY_WITH_THRESHOLD = 0x28
+V2_FN_AUTO_POWER_OFF = 0x25
+V2_FN_EQ_CLASSIC = 0x50          # XM5: six values, the v1 preset table
+V2_FN_EQ_TEN_BAND = (0x56, 0x57)  # XM6: ten bands, the v2 preset table
+V2_FN_ASC_DUAL = 0x6B            # ambient-sound subtype 0x17 (XM5)
+V2_FN_ASC_NOISE_ADAPTATION = 0x6D  # ambient-sound subtype 0x19 (XM6)
+V2_FN_ALERTS = 0x90
+V2_FN_GENERAL_SETTINGS = (0xD1, 0xD2, 0xD3, 0xD4)
+V2_FN_CONNECTION_MODE = 0xE1     # connection quality under audio subtype 0x00 (XM5)
+V2_FN_UPSCALING = 0xE2
+V2_FN_PAUSE_WHEN_TAKEN_OFF = 0xF1
+V2_FN_SPEAK_TO_CHAT = 0xFC
+V2_FN2_VOICE_GUIDANCE = (0x41, 0x42)
+
+# feature -> the codes that carry it, per table. Only these features are ever
+# withheld on the strength of the list; see above.
+V2_FN_FEATURES = {
+    "battery": ("table1", (V2_FN_BATTERY, V2_FN_BATTERY_WITH_THRESHOLD)),
+    "equalizer": ("table1", (V2_FN_EQ_CLASSIC,) + V2_FN_EQ_TEN_BAND),
+    "dsee": ("table1", (V2_FN_UPSCALING,)),
+    "speak-to-chat": ("table1", (V2_FN_SPEAK_TO_CHAT,)),
+    "pause-when-taken-off": ("table1", (V2_FN_PAUSE_WHEN_TAKEN_OFF,)),
+    "auto-power-off": ("table1", (V2_FN_AUTO_POWER_OFF,)),
+    "voice-notifications": ("table2", V2_FN2_VOICE_GUIDANCE),
+}
+
+# General settings: numbered slots (the function codes 0xd1..0xd4) whose
+# meaning varies by model, so each listed slot is asked what it is with
+# `d0 <slot> 00` and answers `d1 <slot> <type> <?> <len> <name> …`. A
+# WH-1000XM5 keeps its touch panel in slot 0xd1 and a WH-1000XM6 in 0xd3
+# (sidetone and multipoint take the others), so the panel is found by name.
+# The value is read and written through the family v1 uses for its touch
+# sensor, inverted: `d8 <slot> 00 <0x00 on / 0x01 off>`.
+V2_SETTING_CAPABILITY_GET = 0xD0
+V2_SETTING_CAPABILITY_RET = 0xD1
+V2_SETTING_GET = 0xD6
+V2_SETTING_RET = 0xD7
+V2_SETTING_SET = 0xD8
+V2_SETTING_NOTIFY = 0xD9
+V2_SETTING_TYPE_BOOLEAN = 0x00
+V2_TOUCH_PANEL_SETTING = b"TOUCH_PANEL_SETTING"
+
+# Alerts. Switching the touch panel off is refused unless the headphones may
+# first ask for confirmation, and they only ask once fixed-message alerts are
+# enabled (`94 00 00`). They then send `99 00 <alert> <?>` and act on
+# `98 00 <alert> 01`. The second alert warns that they will drop the
+# connection to apply the change, which is therefore success, not a fault.
+V2_ALERT_SET_STATUS = 0x94
+V2_ALERT_SET_PARAM = 0x98
+V2_ALERT_NOTIFY = 0x99
+V2_ALERT_FIXED_MESSAGE = 0x00
+V2_ALERT_TOUCH_PANEL_OFF = 0x0A
+V2_ALERT_TOUCH_PANEL_OFF_RECONNECT = 0x0B
+
+# Battery with a low-battery threshold, offered by models that list 0x28
+# instead of 0x20. From Sony's definitions; no capture yet.
+V2_BATTERY_WITH_THRESHOLD = 0x08
+
+# Connection quality lives under audio subtype 0x00 on a device that lists
+# 0xe1 (WH-1000XM5) and under 0x02 otherwise (WH-1000XM6). The XM6 answers
+# both, so the subtype is chosen up front and the parser reads only that one.
+V2_AUDIO_SUB_CONNECTION_MODE = 0x00
+
+
 def v2_pause_source_request() -> tuple[int, bytes]:
     return req(bytes([V2_PLAY_SET_STATUS, V2_PLAY_TYPE_PLAYBACK_CONTROL, 0x00,
                       V2_PLAY_CONTROL_PAUSE]))
@@ -409,10 +487,11 @@ def v2_pause_source_request() -> tuple[int, bytes]:
 # Ambient sound control subtypes. The device answers whichever dialect its
 # firmware speaks, and writes echo that subtype back rather than assuming one.
 # 0x19 is the current over-ear generation's "noise adaptation" parameter (the
-# XM5/XM6 advertise support function 0x6d for it); 0x17 and 0x15 are the older
-# shapes, and V2_ASC_SUBTYPE_AMBIENT is ambient-only. The subtype is chosen by
-# asking, since a device that supports 0x19 still answers 0x17 out of a dormant
-# legacy slot.
+# WH-1000XM6 lists support function 0x6d for it); 0x17 is the dual NC/ambient
+# shape the WH-1000XM5 uses (function 0x6b), 0x15 the wind-capable one, and
+# V2_ASC_SUBTYPE_AMBIENT is ambient-only. A device that lists 0x6d or 0x6b gets
+# its subtype from the list; anything else is asked, since a device that
+# supports 0x19 still answers 0x17 out of a dormant legacy slot.
 V2_ASC_SUBTYPE_QUERY = 0x19
 V2_ASC_SUBTYPE_NA = 0x19
 V2_ASC_SUBTYPE_WIND = 0x15
@@ -506,6 +585,11 @@ V2_FEATURES = {
     "pause-when-taken-off", "voice-notifications", "auto-power-off", "listening-mode", "multipoint",
 }
 FEATURE_CEILINGS = {"v1": V1_FEATURES, "v2": V2_FEATURES}
+
+# v2 controls that are never offered on a name or a ceiling, only once the
+# device itself has described them during negotiation (refine_v2_features):
+# the touch panel lives in a general-settings slot that has to name itself.
+V2_DISCOVERED_FEATURES = {"touch-sensor"}
 
 # Presentation-only markers: feature strings that gate a row's availability in
 # the panel, not a wire command. They ride in FEATURE_SETS (and therefore in
@@ -611,6 +695,43 @@ def features_for(name: str | None, protocol: str | None = None) -> list:
     if protocol in FEATURE_CEILINGS:
         return sorted(FEATURE_CEILINGS[protocol])
     return sorted(ALL_FEATURES)
+
+
+def v2_functions(state: dict, table: str) -> set:
+    """The support functions a v2 device listed on one table, or nothing."""
+    return set((state.get("functions") or {}).get(table) or ())
+
+
+def v2_connection_subtype(state: dict) -> int:
+    """The audio subtype connection quality rides on for this device.
+
+    Subtype 0x00 is a real answer, so only a missing one falls back.
+    """
+    subtype = state.get("connection_subtype")
+    return V2_AUDIO_SUB_CONNECTION_QUALITY if subtype is None else subtype
+
+
+def refine_v2_features(features, state: dict) -> list:
+    """Narrow a v2 feature list by what the device itself says it supports.
+
+    `features` is what the model table (or the v2 ceiling) offers. A device
+    that answered its support lists loses each feature with a pinned code
+    (V2_FN_FEATURES) that it did not list; features with no pinned code are
+    left as the table had them. The touch panel is the one addition
+    (V2_DISCOVERED_FEATURES): it is offered only on a device that named a
+    slot TOUCH_PANEL_SETTING, whatever the table says. A device that never answered keeps the table as it is.
+    """
+    result = set(features or ())
+    functions = state.get("functions")
+    if functions:
+        for feature, (table, codes) in V2_FN_FEATURES.items():
+            listed = v2_functions(state, table)
+            if feature in result and not listed & set(codes):
+                result.discard(feature)
+    result -= V2_DISCOVERED_FEATURES
+    if state.get("touch_slot") is not None:
+        result.add("touch-sensor")
+    return sorted(result)
 
 
 BATTERY_SINGLE = 0x00
@@ -743,11 +864,12 @@ def v2_dsee_request(enabled: bool) -> tuple[int, bytes]:
     return req(bytes([V2_AUDIO_SET, V2_AUDIO_SUB_DSEE, 0x01 if enabled else 0x00]))
 
 
-def v2_connection_quality_get() -> tuple[int, bytes]:
-    return req(bytes([V2_AUDIO_GET, V2_AUDIO_SUB_CONNECTION_QUALITY]))
+def v2_connection_quality_get(subtype: int = V2_AUDIO_SUB_CONNECTION_QUALITY) -> tuple[int, bytes]:
+    return req(bytes([V2_AUDIO_GET, subtype]))
 
 
-def v2_connection_quality_request(value: str) -> tuple[int, bytes]:
+def v2_connection_quality_request(value: str,
+                                  subtype: int = V2_AUDIO_SUB_CONNECTION_QUALITY) -> tuple[int, bytes]:
     # The shared audio family splits DSEE Extreme (subtype 0x01) from connection
     # quality (subtype 0x02), and connection quality is inverted: 0x00 is sound
     # quality (LDAC) and 0x01 is a stable connection (SBC). v1 swaps these two
@@ -755,7 +877,7 @@ def v2_connection_quality_request(value: str) -> tuple[int, bytes]:
     if value not in ("sound-quality", "stable"):
         raise ValueError(f"unknown connection quality {value!r}")
     code = V2_CONNECTION_QUALITY_SOUND if value == "sound-quality" else V2_CONNECTION_QUALITY_STABLE
-    return req(bytes([V2_AUDIO_SET, V2_AUDIO_SUB_CONNECTION_QUALITY, code]))
+    return req(bytes([V2_AUDIO_SET, subtype, code]))
 
 
 def v2_cinema_get() -> tuple[int, bytes]:
@@ -838,10 +960,31 @@ def v2_eq_get(subtype: int = V2_EQ_SUBTYPE_DEFAULT) -> tuple[int, bytes]:
     return req(bytes([V2_EQ_GET, subtype]))
 
 
-def v2_eq_preset_request(preset: str, subtype: int = V2_EQ_SUBTYPE_DEFAULT) -> tuple[int, bytes]:
-    if preset not in V2_EQ_PRESETS:
+def v2_eq_preset_request(preset: str, subtype: int = V2_EQ_SUBTYPE_DEFAULT,
+                         dialect: str = "ten-band") -> tuple[int, bytes]:
+    # The classic dialect (WH-1000XM5) keeps v1's preset codes; the ten-band
+    # one (WH-1000XM6) has its own short table.
+    table = EQ_PRESETS if dialect == "classic" else V2_EQ_PRESETS
+    if preset not in table:
         raise ValueError(f"unknown equalizer preset {preset!r}")
-    return req(bytes([V2_EQ_SET, subtype, V2_EQ_PRESETS[preset], 0x00]))
+    return req(bytes([V2_EQ_SET, subtype, table[preset], 0x00]))
+
+
+def v2_eq_classic_bands_request(bass: int, bands: list[int],
+                                subtype: int = 0x00) -> tuple[int, bytes]:
+    """Clear bass and five bands, -10..10 biased by ten, under the Manual preset.
+
+    The v1 layout with v2's addressing: the family's subtype rather than v1's
+    category 0x01, and the curve's own preset (Manual, 0xa0) rather than 0xff.
+    Verified on a WH-1000XM5 (gabamnml/omarchy-sony-headphones#3).
+    """
+    if len(bands) != 5:
+        raise ValueError("expected 5 equalizer bands")
+    values = [bass] + list(bands)
+    for value in values:
+        if value < -10 or value > 10:
+            raise ValueError("equalizer values must be between -10 and 10")
+    return req(bytes([V2_EQ_SET, subtype, EQ_PRESETS["manual"], 0x06] + [v + 10 for v in values]))
 
 
 def v2_eq_bands_request(bands: list[int], subtype: int = V2_EQ_SUBTYPE_DEFAULT) -> tuple[int, bytes]:
@@ -901,6 +1044,54 @@ def v2_apo_get() -> tuple[int, bytes]:
     return req(bytes([V2_APO_GET, V2_APO_SUB_AUTO_POWER_OFF]))
 
 
+def v2_support_requests() -> list[tuple[int, bytes]]:
+    """What the device implements, one list per message table."""
+    return [req(bytes([V2_SUPPORT_GET, 0x00])),
+            req(bytes([V2_SUPPORT_GET, 0x00]), MSG_COMMAND_2)]
+
+
+def v2_setting_capability_requests(state: dict) -> list[tuple[int, bytes]]:
+    """Ask each listed general-settings slot what it is."""
+    listed = v2_functions(state, "table1")
+    return [req(bytes([V2_SETTING_CAPABILITY_GET, slot, 0x00]))
+            for slot in V2_FN_GENERAL_SETTINGS if slot in listed]
+
+
+def v2_battery_get(subtype: int = V2_BATTERY_SINGLE) -> tuple[int, bytes]:
+    return req(bytes([V2_BATTERY_GET, subtype]))
+
+
+def v2_touch_get(slot: int) -> tuple[int, bytes]:
+    return req(bytes([V2_SETTING_GET, slot]))
+
+
+def v2_touch_requests(slot: int, enabled: bool, alerts: bool) -> list[tuple[int, bytes]]:
+    """Switch the touch panel in `slot`, with the alert the off switch needs.
+
+    Turning the panel on goes straight through. Turning it off is refused
+    unless the headphones may ask for confirmation first, so a device that
+    lists alerts gets them enabled ahead of the change; the confirmation they
+    then ask for is answered by Link (see alert_confirmation).
+    """
+    change = req(bytes([V2_SETTING_SET, slot, V2_SETTING_TYPE_BOOLEAN, 0x00 if enabled else 0x01]))
+    if enabled or not alerts:
+        return [change, v2_touch_get(slot)]
+    return [req(bytes([V2_ALERT_SET_STATUS, V2_ALERT_FIXED_MESSAGE, 0x00])), change, v2_touch_get(slot)]
+
+
+def alert_confirmation(msg_type: int, payload: bytes) -> tuple[int, bytes] | None:
+    """The yes to a touch-panel confirmation the headphones asked for, if this is one.
+
+    Nothing else the headphones ask is ever answered: an alert this plugin did
+    not provoke is the user's to accept on the device, not ours.
+    """
+    if (msg_type == MSG_COMMAND_1 and len(payload) == 4 and payload[0] == V2_ALERT_NOTIFY
+            and payload[1] == V2_ALERT_FIXED_MESSAGE
+            and payload[2] in (V2_ALERT_TOUCH_PANEL_OFF, V2_ALERT_TOUCH_PANEL_OFF_RECONNECT)):
+        return req(bytes([V2_ALERT_SET_PARAM, V2_ALERT_FIXED_MESSAGE, payload[2], 0x01]))
+    return None
+
+
 def v2_device_list_get() -> tuple[int, bytes]:
     # Multipoint device list, asked on message table 2 under subtype 0x02.
     return req(bytes([V2_PERI_GET, V2_PERI_SUB_DEVICE_LIST]), MSG_COMMAND_2)
@@ -917,7 +1108,10 @@ def v2_source_switch_request(address: str) -> tuple[int, bytes]:
 
 def v2_refresh_requests(subtype: int = V2_ASC_SUBTYPE_QUERY,
                         eq_subtype: int = V2_EQ_SUBTYPE_DEFAULT,
-                        bgm_subtype: int = V2_AUDIO_SUB_BGM) -> list[tuple[int, bytes]]:
+                        bgm_subtype: int = V2_AUDIO_SUB_BGM,
+                        battery_subtype: int = V2_BATTERY_SINGLE,
+                        connection_subtype: int = V2_AUDIO_SUB_CONNECTION_QUALITY,
+                        touch_slot: int | None = None) -> list[tuple[int, bytes]]:
     """Everything worth asking for after a v2 connect, in display order.
 
     Ambient sound is asked under the subtype the device answered during the
@@ -926,8 +1120,8 @@ def v2_refresh_requests(subtype: int = V2_ASC_SUBTYPE_QUERY,
     background music are asked under their own discovered subtypes for the same
     reason.
     """
-    return [
-        req(bytes([V2_BATTERY_GET, V2_BATTERY_SINGLE])),
+    requests = [
+        v2_battery_get(battery_subtype),
         v2_audio_codec_get(),
         # v2 firmware is still read with the v1 opcode, subtype 0x02.
         req(bytes([FW_VERSION_REQUEST, 0x02])),
@@ -938,7 +1132,7 @@ def v2_refresh_requests(subtype: int = V2_ASC_SUBTYPE_QUERY,
         v2_apo_get(),
         v2_stc_get(),
         v2_dsee_get(),
-        v2_connection_quality_get(),
+        v2_connection_quality_get(connection_subtype),
         v2_bgm_get(bgm_subtype),
         v2_cinema_get(),
         v2_device_list_get(),
@@ -948,6 +1142,9 @@ def v2_refresh_requests(subtype: int = V2_ASC_SUBTYPE_QUERY,
         # so the refresh sends the captured 3-byte shape.
         req(bytes([VOICE_NOTIFICATIONS_GET, 0x01, 0x01]), MSG_COMMAND_2),
     ]
+    if touch_slot is not None:
+        requests.append(v2_touch_get(touch_slot))
+    return requests
 
 
 # ---------------------------------------------------------------------------
@@ -1059,6 +1256,15 @@ def initial_state() -> dict:
         "eq_bands": None,
         "eq_band_count": None,
         "eq_subtype": None,
+        # "classic" (clear bass + five bands, v1 presets: WH-1000XM5) or
+        # "ten-band" (WH-1000XM6) on v2, from the reply's band count.
+        "eq_dialect": None,
+        # v2 discovery: the support-function lists the device answered, as
+        # {"table1": [...], "table2": [...]}, and what they decided.
+        "functions": None,
+        "battery_subtype": None,
+        "connection_subtype": None,
+        "touch_slot": None,
         "dsee": None,
         "connection_quality": None,
         "listening_mode": None,
@@ -1121,7 +1327,7 @@ def _apply_battery(state: dict, payload: bytes, subtypes: tuple[int, ...],
     """Record battery percentage and charging flag.
 
     v1 accepts the single/case subtypes with no bound on the percentage; v2
-    accepts only the single subtype and bounds it to 0..100. Callers have
+    accepts the single and with-threshold subtypes and bounds it to 0..100. Callers have
     already checked the payload length.
     """
     if payload[1] not in subtypes:
@@ -1232,6 +1438,18 @@ def apply_payload_v2(state: dict, msg_type: int, payload: bytes) -> bool:
     before = dict(state)
     code = payload[0]
 
+    # Support lists arrive on both tables in the same shape: `07 00 <count>`
+    # then that many (function, priority) pairs. A list whose length does not
+    # match its count is ignored rather than half-read.
+    if code == V2_SUPPORT_RET and len(payload) >= 3 and payload[1] == 0x00:
+        pairs = payload[3:]
+        if len(pairs) == 2 * payload[2]:
+            table = "table2" if msg_type == MSG_COMMAND_2 else "table1"
+            functions = dict(state.get("functions") or {})
+            functions[table] = sorted(set(pairs[0::2]))
+            state["functions"] = functions
+        return state != before
+
     # The multipoint device list rides message table 2 on v2, so it is read
     # here: the v1 parser handles MSG_COMMAND_2 only for voice notifications
     # and is never reached on a v2 link.
@@ -1242,10 +1460,12 @@ def apply_payload_v2(state: dict, msg_type: int, payload: bytes) -> bool:
                 state["devices"] = devices
                 state["playback_source"] = next(
                     (device["address"] for device in devices if device["playback"]), None)
-        # Voice guidance is inverted (0x00 = on) with the value at index 2;
-        # the trailing byte's meaning is unknown, so it is never required
-        # or interpreted beyond the length check.
-        if code in (VOICE_NOTIFICATIONS_RET, VOICE_NOTIFICATIONS_NOTIFY) and len(payload) >= 4:
+        # Voice guidance is inverted (0x00 = on) with the value at index 2.
+        # The reply carries a trailing byte of unknown meaning (`47 01 00 01`)
+        # but the notification after a write does not (`49 01 00`, WH-1000XM5),
+        # so only the value byte is required.
+        if code in (VOICE_NOTIFICATIONS_RET, VOICE_NOTIFICATIONS_NOTIFY) and len(payload) >= 3 \
+                and payload[1] == 0x01 and payload[2] in (0x00, 0x01):
             state["voice_notifications"] = payload[2] == 0x00
         return state != before
 
@@ -1270,7 +1490,11 @@ def apply_payload_v2(state: dict, msg_type: int, payload: bytes) -> bool:
         sub = payload[1]
         if sub == V2_AUDIO_SUB_DSEE and len(payload) == 3 and payload[2] in (0, 1):
             state["dsee"] = payload[2] == 0x01
-        elif sub == V2_AUDIO_SUB_CONNECTION_QUALITY and len(payload) == 3 and payload[2] in (0, 1):
+        elif sub == v2_connection_subtype(state) \
+                and sub in (V2_AUDIO_SUB_CONNECTION_MODE, V2_AUDIO_SUB_CONNECTION_QUALITY) \
+                and len(payload) == 3 and payload[2] in (0, 1):
+            # Only the subtype chosen at connect counts: the XM6 answers 0x00
+            # as well as its own 0x02, and the two need not agree.
             state["connection_quality"] = "stable" if payload[2] == 0x01 else "sound-quality"
         elif sub == V2_AUDIO_SUB_UPMIX_CINEMA and len(payload) == 3:
             # Upmix Cinema is inverted: 0x00 means on.
@@ -1288,7 +1512,8 @@ def apply_payload_v2(state: dict, msg_type: int, payload: bytes) -> bool:
                     state["bgm_enabled"], state.get("cinema_enabled"))
 
     if code in (V2_BATTERY_RET, V2_BATTERY_NOTIFY) and len(payload) >= 4:
-        _apply_battery(state, payload, (V2_BATTERY_SINGLE,), minimum=0, maximum=100)
+        _apply_battery(state, payload, (V2_BATTERY_SINGLE, V2_BATTERY_WITH_THRESHOLD),
+                       minimum=0, maximum=100)
 
     elif code in (V2_ASC_RET, V2_ASC_NOTIFY) and len(payload) >= 6:
         subtype = payload[1]
@@ -1325,13 +1550,39 @@ def apply_payload_v2(state: dict, msg_type: int, payload: bytes) -> bool:
         subtype = payload[1]
         band_count = payload[3]
         if subtype in (0x00, 0x02, 0x04) and 4 + band_count <= len(payload):
-            # Six-band replies use the classic offset-ten layout; ten-band use six.
-            offset = 10 if band_count == 6 else V2_EQ_BAND_OFFSET
-            state["eq_preset"] = V2_EQ_PRESET_FROM_CODE.get(payload[2])
-            state["eq_bass"] = None
-            state["eq_bands"] = [payload[4 + i] - offset for i in range(band_count)]
+            # The band count, not the subtype, says which dialect this is: a
+            # WH-1000XM6 answers ten bands under 0x00 as well as 0x04. Six
+            # values are the classic layout the WH-1000XM5 keeps — clear bass
+            # then five bands, biased by ten, named with v1's preset codes;
+            # ten are the XM6's own curve, biased by six, with its own table.
+            values = list(payload[4:4 + band_count])
+            if band_count == 6:
+                state["eq_dialect"] = "classic"
+                state["eq_preset"] = EQ_PRESET_FROM_CODE.get(payload[2])
+                state["eq_bass"] = values[0] - 10
+                state["eq_bands"] = [v - 10 for v in values[1:]]
+            else:
+                state["eq_dialect"] = "ten-band"
+                state["eq_preset"] = V2_EQ_PRESET_FROM_CODE.get(payload[2])
+                state["eq_bass"] = None
+                state["eq_bands"] = [v - V2_EQ_BAND_OFFSET for v in values]
             state["eq_band_count"] = band_count
             state["eq_subtype"] = subtype
+
+    elif code == V2_SETTING_CAPABILITY_RET and len(payload) >= 5 \
+            and payload[1] in V2_FN_GENERAL_SETTINGS:
+        # `d1 <slot> <type> <?> <len> <name> …`; only a boolean slot named
+        # for the touch panel is taken. The name is matched exactly, so a
+        # truncated or padded one is no match.
+        name = payload[5:5 + payload[4]]
+        if payload[2] == V2_SETTING_TYPE_BOOLEAN and name == V2_TOUCH_PANEL_SETTING:
+            state["touch_slot"] = payload[1]
+
+    elif code in (V2_SETTING_RET, V2_SETTING_NOTIFY) and len(payload) == 4 \
+            and state.get("touch_slot") is not None and payload[1] == state["touch_slot"] \
+            and payload[2] == V2_SETTING_TYPE_BOOLEAN and payload[3] in (0x00, 0x01):
+        # Inverted, like most v2 switches: 0x00 means the panel is on.
+        state["touch_sensor"] = payload[3] == 0x00
 
     elif code in (V2_SYSTEM_RET, V2_SYSTEM_NOTIFY) and len(payload) >= 2:
         sub = payload[1]
@@ -2262,6 +2513,13 @@ class Link:
         # Set when a Background-music write raises: the daemon reads it in
         # lose_link to explain a link the write took down (see BGM_WRITE_KEYS).
         self.interrupted_key: str | None = None
+        # The touch-panel confirmation (see alert_confirmation): answered only
+        # while apply_setting has asked for the change that provokes it, and
+        # queued rather than written from inside dispatch, which can run while
+        # a write is still waiting for its acknowledgement.
+        self.confirm_alerts = False
+        self.expect_drop = False
+        self._outbox: list[tuple[int, bytes]] = []
 
     # The socket stays reachable under its old name: the daemon selects on it
     # and the tests stand streams in for it. It lives on the transport.
@@ -2495,6 +2753,12 @@ class Link:
         and OSError, so an unexpected parser error is traced and dropped here
         rather than allowed to take the daemon down over one frame.
         """
+        if self.confirm_alerts:
+            answer = alert_confirmation(msg_type, payload)
+            if answer is not None:
+                self._outbox.append(answer)
+                if payload[2] == V2_ALERT_TOUCH_PANEL_OFF_RECONNECT:
+                    self.expect_drop = True
         try:
             changed = self.adapter.apply(self.state, msg_type, payload)
         except Exception as exc:
@@ -2532,6 +2796,12 @@ class Link:
                 continue
             self._ack(seq)
             self.dispatch(msg_type, payload)
+            self._flush()
+
+    def _flush(self) -> None:
+        """Send what dispatch queued, now that no write is mid-acknowledgement."""
+        while self._outbox:
+            self.write(*self._outbox.pop(0))
 
     def request(self, requests: list[tuple[int, bytes]], settle: float = 0.25) -> None:
         for msg_type, payload in requests:
@@ -2566,18 +2836,57 @@ class Link:
         guessed from a reply alone: V2_ASC_PROBE_ORDER is the probe order,
         query subtype first, and the first one that answers wins.
         """
-        return self._select_subtype(V2_ASC_PROBE_ORDER, v2_asc_get, "asc_subtype", None)
+        listed = v2_functions(self.state, "table1")
+        if V2_FN_ASC_NOISE_ADAPTATION in listed:
+            order = (V2_ASC_SUBTYPE_NA,)
+        elif V2_FN_ASC_DUAL in listed:
+            order = (0x17,)
+        else:
+            order = V2_ASC_PROBE_ORDER
+        return self._select_subtype(order, v2_asc_get, "asc_subtype", None)
+
+    def read_support(self) -> None:
+        """Ask what the device implements and settle what that decides.
+
+        The support lists come first, then the general-settings slots they
+        list are asked their names (which is how the touch panel is found),
+        and the battery and connection-quality subtypes are taken from the
+        lists. A device that answers no list keeps today's defaults, and every
+        family that would have been decided by one is probed instead.
+        """
+        self.request(v2_support_requests(), settle=0.4)
+        if not self.state.get("functions"):
+            return
+        capability = v2_setting_capability_requests(self.state)
+        if capability:
+            self.request(capability, settle=0.4)
+        listed = v2_functions(self.state, "table1")
+        if V2_FN_BATTERY not in listed and V2_FN_BATTERY_WITH_THRESHOLD in listed:
+            self.state["battery_subtype"] = V2_BATTERY_WITH_THRESHOLD
+        else:
+            self.state["battery_subtype"] = V2_BATTERY_SINGLE
+        self.state["connection_subtype"] = (
+            V2_AUDIO_SUB_CONNECTION_MODE if V2_FN_CONNECTION_MODE in listed
+            else V2_AUDIO_SUB_CONNECTION_QUALITY)
 
     def select_eq_subtype(self) -> int | None:
         """Ask which equalizer dialect this device answers, and remember it.
 
-        The WH-1000XM6 answers subtype 0x04 and silently ignores 0x00, but the
-        subtype is asked rather than assumed so XM5-style devices that speak
-        0x00 still work: the candidates are tried in order and the first one
-        that answers wins.
+        A device that lists its equalizer function is told by the list: 0x50
+        is the WH-1000XM5's classic family under subtype 0x00, and 0x56/0x57
+        the WH-1000XM6's ten-band one under 0x04 (the XM6 answers 0x00 too,
+        but 0x04 is the one verified for writes). Otherwise the subtype is
+        asked: the candidates are tried in order and the first that answers
+        wins.
         """
-        return self._select_subtype(
-            (V2_EQ_SUBTYPE_DEFAULT, 0x00), v2_eq_get, "eq_subtype", V2_EQ_SUBTYPE_DEFAULT)
+        listed = v2_functions(self.state, "table1")
+        if listed & set(V2_FN_EQ_TEN_BAND):
+            candidates = (V2_EQ_SUBTYPE_DEFAULT,)
+        elif V2_FN_EQ_CLASSIC in listed:
+            candidates = (0x00,)
+        else:
+            candidates = (V2_EQ_SUBTYPE_DEFAULT, 0x00)
+        return self._select_subtype(candidates, v2_eq_get, "eq_subtype", candidates[0])
 
     def select_bgm_subtype(self) -> int | None:
         """Ask which background-music dialect this device answers, and remember it.
@@ -2683,10 +2992,13 @@ class V2Protocol(Protocol):
 
     def negotiate(self, link: Link) -> None:
         # v2 reuses opcodes across features and tells them apart by subtype, so
-        # each subtype-keyed family is asked which dialect it answers first.
+        # each subtype-keyed family is asked which dialect it answers first —
+        # after the support lists, which settle most of them without probing.
+        link.read_support()
         link.select_asc_subtype()
         link.select_eq_subtype()
         link.select_bgm_subtype()
+        link.state["features"] = refine_v2_features(link.state.get("features"), link.state)
 
     def refresh_requests(self, state: dict) -> list[tuple[int, bytes]]:
         # Subtype 0x00 is a real equalizer dialect, so it must not be
@@ -2696,11 +3008,14 @@ class V2Protocol(Protocol):
             state.get("asc_subtype") or V2_ASC_SUBTYPE_QUERY,
             eq_subtype=V2_EQ_SUBTYPE_DEFAULT if eq_subtype is None else eq_subtype,
             bgm_subtype=state.get("bgm_subtype") or V2_AUDIO_SUB_BGM,
+            battery_subtype=state.get("battery_subtype") or V2_BATTERY_SINGLE,
+            connection_subtype=v2_connection_subtype(state),
+            touch_slot=state.get("touch_slot"),
         )
 
     def poll_requests(self, state: dict) -> list[tuple[int, bytes]]:
         return [
-            req(bytes([V2_BATTERY_GET, V2_BATTERY_SINGLE])),
+            v2_battery_get(state.get("battery_subtype") or V2_BATTERY_SINGLE),
             v2_asc_get(state.get("asc_subtype") or V2_ASC_SUBTYPE_QUERY),
         ]
 
@@ -2774,8 +3089,9 @@ SETTING_FEATURES = {
 
 # Setting keys that only exist on one generation. The feature list normally
 # gates them, but a stale or missing list must not let a write cross protocols,
-# so each builder refuses the other side's keys outright.
-V1_ONLY_SETTINGS = {"touch-sensor"}
+# so each builder refuses the other side's keys outright. The touch panel is
+# on both: v1 at a fixed address, v2 in whichever slot names itself for it.
+V1_ONLY_SETTINGS: set = set()
 V2_ONLY_SETTINGS = {"connection-quality", "listening-mode", "bgm-room-size", "playback-source"}
 
 # The fields both builders read before they branch on the key: the resolved
@@ -2928,10 +3244,16 @@ def setting_requests_v2(state: dict, key: str, value) -> list[tuple[int, bytes]]
 
     if key == "eq":
         # 0x00 is a valid XM5-style subtype, so only an unset value defaults.
-        return [v2_eq_preset_request(str(value), ctx.eq_subtype), v2_eq_get(ctx.eq_subtype)]
+        dialect = state.get("eq_dialect") or "ten-band"
+        return [v2_eq_preset_request(str(value), ctx.eq_subtype, dialect), v2_eq_get(ctx.eq_subtype)]
 
     if key == "eq-bands":
         numbers = [int(v) for v in re.split(r"[,\s]+", str(value).strip()) if v]
+        if state.get("eq_dialect") == "classic":
+            if len(numbers) != 6:
+                raise ValueError("eq-bands takes 6 values: clear-bass and 5 bands, each -10..10")
+            return [v2_eq_classic_bands_request(numbers[0], numbers[1:], ctx.eq_subtype),
+                    v2_eq_get(ctx.eq_subtype)]
         if len(numbers) != V2_EQ_BAND_COUNT:
             raise ValueError(
                 f"eq-bands takes {V2_EQ_BAND_COUNT} values, each "
@@ -2976,7 +3298,17 @@ def setting_requests_v2(state: dict, key: str, value) -> list[tuple[int, bytes]]
         return [v2_dsee_request(enabled), v2_dsee_get()]
 
     if key == "connection-quality":
-        return [v2_connection_quality_request(str(value)), v2_connection_quality_get()]
+        subtype = v2_connection_subtype(state)
+        return [v2_connection_quality_request(str(value), subtype),
+                v2_connection_quality_get(subtype)]
+
+    if key == "touch-sensor":
+        slot = state.get("touch_slot")
+        if slot is None:
+            raise ValueError(f"{state.get('name') or 'this device'} does not support touch-sensor")
+        enabled = parse_bool(value, state.get("touch_sensor"))
+        alerts = V2_FN_ALERTS in v2_functions(state, "table1")
+        return v2_touch_requests(slot, enabled, alerts)
 
     if key == "playback-source":
         # Hand playback to one multipoint peer, then re-read the list so the
@@ -3051,12 +3383,29 @@ def _settle_pending(link: Link, key: str, reason: str | None = None) -> None:
     link.notify_change()
 
 
+class Reconnecting(NotConnected):
+    """The headphones dropped the link on purpose, to apply a change.
+
+    A WH-1000XM5 switching its touch panel off warns that it will reconnect
+    (V2_ALERT_TOUCH_PANEL_OFF_RECONNECT) and then does. That is the change
+    landing, not a fault: the daemon treats the link as lost and brings it
+    back, and the read-back on the fresh link shows the new value.
+    """
+
+
 def apply_setting(link: Link, key: str, value) -> dict:
     requests = link.adapter.setting_requests(link.state, key, value)
     # The request list is built (and may refuse the key) before anything is
     # marked: a setting the builder rejects never claims to be in flight.
     _mark_pending(link, key)
     link.interrupted_key = None
+    # A change that enabled alerts is one the headphones will ask to have
+    # confirmed; asking for the change was the confirmation, so that question
+    # alone is answered yes. Nothing else they ask is.
+    link.confirm_alerts = any(
+        msg_type == MSG_COMMAND_1 and payload[:1] == bytes([V2_ALERT_SET_STATUS])
+        for msg_type, payload in requests)
+    link.expect_drop = False
     before = dict(link.state)
     try:
         for msg_type, payload in requests:
@@ -3081,7 +3430,7 @@ def apply_setting(link: Link, key: str, value) -> dict:
             _settle_pending(link, key)
         else:
             _settle_pending(link, key, f"the headphones did not change {key}")
-    except Exception:
+    except Exception as exc:
         # A write or pump that raises after the mark must not leave the key in
         # pending with no expiry and no settle: drop it (publishing the
         # transition) and re-raise so the connection/validation error path
@@ -3092,7 +3441,15 @@ def apply_setting(link: Link, key: str, value) -> dict:
         if key in BGM_WRITE_KEYS:
             link.interrupted_key = key
         _settle_pending(link, key)
+        # A link the headphones said they would drop, dropped: the change is
+        # being applied, so say that instead of reporting a lost connection.
+        if link.expect_drop and isinstance(exc, (NotConnected, OSError)) \
+                and not isinstance(exc, Reconnecting):
+            raise Reconnecting(f"the headphones are reconnecting to apply {key}") from None
         raise
+    finally:
+        link.confirm_alerts = False
+        link._outbox.clear()
     return link.state
 
 
@@ -3290,6 +3647,12 @@ class DemoLink(Link):
         return 0
 
 
+def _capability_reply(slot: int, name: bytes, summary: bytes = b"") -> bytes:
+    """A general-settings slot describing itself: `d1 <slot> 00 01 <len> <name> <len> <summary>`."""
+    return bytes([V2_SETTING_CAPABILITY_RET, slot, V2_SETTING_TYPE_BOOLEAN, 0x01, len(name)]) \
+        + name + bytes([len(summary)]) + summary
+
+
 class DemoDeviceV2:
     """Answers requests the way a WH-1000XM6 does, without any Bluetooth.
 
@@ -3297,6 +3660,27 @@ class DemoDeviceV2:
     and replies with real reply payloads, so an encoder and its parser are
     exercised against each other without hardware.
     """
+
+    # (function, priority) pairs exactly as a WH-1000XM6 on firmware 3.1.5
+    # listed them, one string per message table, and the general-settings
+    # slots it named. The touch panel sits in slot 0xd3.
+    TABLE1 = bytes.fromhex(
+        "10 ff 12 ff 13 ff 14 ff 15 ff 16 ff 17 ff 23 ff 25 38 27 ff 20 ff 57 13 56 ff"
+        " 6d 0b 71 02 90 ff a1 14 c1 ff c2 ff e2 1d f1 3a fc 0d 69 2c f9 43 d1 3d d3 2b"
+        " 94 ff 41 31 42 3c 44 ff ff 2f d2 22 19 ff eb 10 e5 11 e6 0e e7 1c b7 17 fd 2d"
+        " b6 19 b0 44 b2 45 b8 21 34 41 f4 25")
+    TABLE2 = bytes.fromhex(
+        "42 3f 52 ff 54 ff 60 ff 61 ff f2 ff f5 27 f9 33 63 ff 21 ff 23 ff 34 ff fd ff"
+        " f8 32 33 05 31 ff")
+    SLOTS = {
+        0xD1: (b"SIDETONE_SETTING", b"SIDETONE_SETTING_SUMMARY"),
+        0xD2: (b"MULTIPOINT_SETTING", b"MULTIPOINT_SETTING_SUMMARY_LDAC_AVAILABLE"),
+        0xD3: (V2_TOUCH_PANEL_SETTING, b""),
+    }
+    TOUCH_SLOT = 0xD3
+    # Which alert the touch panel's off switch raises. The XM5's reconnect
+    # variant is the one a capture shows; the XM6's is not yet captured.
+    TOUCH_ALERT = V2_ALERT_TOUCH_PANEL_OFF_RECONNECT
 
     def __init__(self):
         self.battery = 82
@@ -3329,9 +3713,15 @@ class DemoDeviceV2:
         self.playback_source = None
         # Voice guidance, inverted on the v2 wire (0x00 = on).
         self.voice_notifications = True
+        # The touch panel and the alert its off switch needs.
+        self.touch_panel = True
+        self.alerts = False
         # Opt-in no-move mode for the write-then-verify tests, off by default;
         # see DemoDevice.stubborn.
         self.stubborn = False
+        # Off for a stand-in that predates the support lists, so the probing
+        # fallback stays exercised.
+        self.lists_support = True
 
     def device_list(self) -> bytes:
         """The multipoint list, shaped the way parse_v2_device_list reads it.
@@ -3443,11 +3833,51 @@ class DemoDeviceV2:
             + [b + V2_EQ_BAND_OFFSET for b in self.eq_bands]
         )
 
+    def discovery_reply(self, msg_type: int, code: int, sub: int,
+                        payload: bytes) -> list[tuple[int, bytes]] | None:
+        """Support lists, slot names, the touch panel and its alert; None if not one of those."""
+        if code == V2_SUPPORT_GET and sub == 0x00:
+            if not self.lists_support:
+                return []
+            table = self.TABLE2 if msg_type == MSG_COMMAND_2 else self.TABLE1
+            return [(msg_type, bytes([V2_SUPPORT_RET, 0x00, len(table) // 2]) + table)]
+        if msg_type != MSG_COMMAND_1:
+            return None
+        if code == V2_SETTING_CAPABILITY_GET:
+            if not self.lists_support or sub not in self.SLOTS:
+                return []
+            return [req(_capability_reply(sub, *self.SLOTS[sub]))]
+        if code == V2_SETTING_GET and sub == self.TOUCH_SLOT:
+            return [req(bytes([V2_SETTING_RET, sub, V2_SETTING_TYPE_BOOLEAN,
+                               0x00 if self.touch_panel else 0x01]))]
+        if code == V2_SETTING_SET and sub == self.TOUCH_SLOT and len(payload) >= 4:
+            if payload[3] == 0x00 and not self.stubborn:
+                self.touch_panel = True
+            elif payload[3] == 0x01 and self.alerts and not self.stubborn:
+                # Not yet: the headphones ask first, and act on the answer.
+                return [req(bytes([V2_ALERT_NOTIFY, V2_ALERT_FIXED_MESSAGE, self.TOUCH_ALERT, 0x01]))]
+            return [req(bytes([V2_SETTING_NOTIFY, sub, V2_SETTING_TYPE_BOOLEAN,
+                               0x00 if self.touch_panel else 0x01]))]
+        if code == V2_ALERT_SET_STATUS and sub == V2_ALERT_FIXED_MESSAGE and len(payload) >= 3:
+            self.alerts = payload[2] == 0x00
+            return []
+        if code == V2_ALERT_SET_PARAM and sub == V2_ALERT_FIXED_MESSAGE and len(payload) >= 4 \
+                and payload[2] == self.TOUCH_ALERT:
+            if payload[3] == 0x01:
+                self.touch_panel = False
+            return [req(bytes([V2_SETTING_NOTIFY, self.TOUCH_SLOT, V2_SETTING_TYPE_BOOLEAN,
+                               0x00 if self.touch_panel else 0x01]))]
+        return None
+
     def respond(self, msg_type: int, payload: bytes) -> list[tuple[int, bytes]]:
         """One request in, the replies a real device would send back out."""
         if not payload:
             return []
         code, sub = payload[0], (payload[1] if len(payload) > 1 else 0)
+
+        discovered = self.discovery_reply(msg_type, code, sub, payload)
+        if discovered is not None:
+            return discovered
 
         if msg_type == MSG_COMMAND_1 and code == V2_PLAY_SET_STATUS:
             # The real headset forwards this to a phone; the stand-in only
@@ -3547,16 +3977,107 @@ class DemoDeviceV2:
         return []
 
 
-class DemoLinkV2(DemoLink):
-    """A Link whose other end is a v2 stand-in device."""
+class DemoDeviceXM5(DemoDeviceV2):
+    """Answers requests the way a WH-1000XM5 on firmware 2.5.1 does.
 
-    def __init__(self, on_change=None, device=None):
+    Every list and layout here is one the real headphones sent, as captured
+    for gabamnml/omarchy-sony-headphones#3 (Vitor Pacheco): ambient sound
+    under 0x17, the classic clear-bass + five-band equalizer with v1's preset
+    codes, connection quality under audio subtype 0x00, the touch panel in
+    slot 0xd1 behind the reconnect alert, and a voice-guidance notification
+    without the GET reply's trailing byte. No listening mode or multipoint
+    list: this plugin has no capture of either on an XM5.
+    """
+
+    TABLE1 = bytes.fromhex(
+        "10 ff 12 ff 13 ff 14 ff 23 ff 25 21 20 ff 27 ff d1 19 32 26 50 0a 6b 06 70 01"
+        " 90 ff a1 0b c1 ff c2 ff e1 0d e2 0f f4 14 93 ff 69 1a d2 12 f9 27 b0 28 b2 2b"
+        " b6 2a f1 23 fd 1b fc 09 b8 ff b7 ff 19 ff")
+    TABLE2 = bytes.fromhex("41 25 50 ff f2 ff 32 03 31 ff f8 1e")
+    SLOTS = {
+        0xD1: (V2_TOUCH_PANEL_SETTING, b""),
+        0xD2: (b"MULTIPOINT_SETTING", b""),
+    }
+    TOUCH_SLOT = 0xD1
+    TOUCH_ALERT = V2_ALERT_TOUCH_PANEL_OFF_RECONNECT
+
+    def __init__(self):
+        super().__init__()
+        self.subtype = 0x17
+        self.level = 15
+        self.battery = 64
+        self.eq_preset = EQ_PRESETS["off"]
+        self.eq_classic = [10] * 6    # clear bass and five bands, biased by ten
+        self.dsee = False
+        self.connection_quality = V2_CONNECTION_QUALITY_SOUND
+
+    def respond(self, msg_type: int, payload: bytes) -> list[tuple[int, bytes]]:
+        if not payload:
+            return []
+        code, sub = payload[0], (payload[1] if len(payload) > 1 else 0)
+
+        if msg_type == MSG_COMMAND_2:
+            if code == VOICE_NOTIFICATIONS_SET and len(payload) >= 3 and payload[2] in (0x00, 0x01):
+                if not self.stubborn:
+                    self.voice_notifications = payload[2] == 0x00
+                return [(MSG_COMMAND_2, bytes([VOICE_NOTIFICATIONS_NOTIFY, 0x01,
+                                               0x00 if self.voice_notifications else 0x01]))]
+            if code in (V2_PERI_GET, V2_PERI_SET_EXTENDED):
+                return []
+
+        if msg_type == MSG_COMMAND_1:
+            if code == FW_VERSION_REQUEST:
+                return [req(bytes([FW_VERSION_REPLY, 0x02, 5]) + b"2.5.1")]
+            if code in (V2_ASC_GET, V2_ASC_SET) and sub != 0x17:
+                return []
+            if code in (V2_EQ_GET, V2_EQ_SET):
+                return self.classic_equalizer(code, sub, payload)
+            if code in (V2_AUDIO_GET, V2_AUDIO_SET):
+                if sub == V2_AUDIO_SUB_CONNECTION_MODE:
+                    if code == V2_AUDIO_SET and not self.stubborn and len(payload) >= 3 \
+                            and payload[2] in (V2_CONNECTION_QUALITY_SOUND, V2_CONNECTION_QUALITY_STABLE):
+                        self.connection_quality = payload[2]
+                    reply = V2_AUDIO_RET if code == V2_AUDIO_GET else V2_AUDIO_NOTIFY
+                    return [req(bytes([reply, sub, self.connection_quality]))]
+                if sub != V2_AUDIO_SUB_DSEE:
+                    return []
+        return super().respond(msg_type, payload)
+
+    def classic_equalizer(self, code: int, sub: int, payload: bytes) -> list[tuple[int, bytes]]:
+        if sub != 0x00:
+            return []
+        if code == V2_EQ_SET and not self.stubborn and len(payload) >= 4:
+            if payload[3] == 0x06 and len(payload) >= 10:
+                self.eq_classic = list(payload[4:10])
+                self.eq_preset = payload[2]
+            elif payload[2] in EQ_PRESET_FROM_CODE:
+                self.eq_preset = payload[2]
+                self.eq_classic = [17] + [10] * 5 if payload[2] == EQ_PRESETS["bass-boost"] else [10] * 6
+        reply = V2_EQ_RET if code == V2_EQ_GET else V2_EQ_NOTIFY
+        return [req(bytes([reply, sub, self.eq_preset, 0x06] + self.eq_classic))]
+
+
+DEMO_V2_MODELS = {"WH-1000XM6": DemoDeviceV2, "WH-1000XM5": DemoDeviceXM5}
+
+
+class DemoLinkV2(DemoLink):
+    """A Link whose other end is a v2 stand-in device.
+
+    Unlike the v1 demo it negotiates the way a real v2 link does — support
+    lists, slot names, dialect probes — so the discovery path is the one the
+    demo and the tests run, not a shortcut around it.
+    """
+
+    def __init__(self, on_change=None, device=None, model: str = "WH-1000XM6"):
         super().__init__(on_change=on_change)
-        self.device = device if device is not None else DemoDeviceV2()
+        self.device = device if device is not None else DEMO_V2_MODELS[model]()
+        model = next((name for name, cls in DEMO_V2_MODELS.items()
+                      if type(self.device) is cls), model)
         self.transport = DemoTransport(self.device)
         self._set_protocol("v2")
-        self.state["name"] = "WH-1000XM6 (demo)"
-        self.state["features"] = features_for("WH-1000XM6", "v2")
+        self.state["name"] = f"{model} (demo)"
+        self.state["features"] = features_for(model, "v2")
+        self.adapter.negotiate(self)
 
 
 # ---------------------------------------------------------------------------
@@ -4081,6 +4602,13 @@ class Daemon:
             self.last_activity = self.clock()
             try:
                 return action(self.link)
+            except Reconnecting as exc:
+                # Done, not failed: the headphones went away to apply the
+                # change, and the main loop brings them back like any other
+                # lost link. Retrying would send the change a second time.
+                LOG.info("%s", exc)
+                self.lose_link(str(exc))
+                return None
             except (NotConnected, OSError) as exc:
                 self.lose_link(str(exc))
                 if attempt == 2:
@@ -4466,12 +4994,15 @@ def demo_mode() -> str | None:
     """Which command set the demo stands in for, or None when demos are off.
 
     "1" is the original setting and keeps the v1 stand-in; "v2" and "2" ask
-    for the v2 one. Any other truthy value is still a demo, so an old
+    for the v2 one (a WH-1000XM6), and "xm5" for the WH-1000XM5 stand-in,
+    which also speaks v2. Any other truthy value is still a demo, so an old
     SONY_HEADPHONES_DEMO=true behaves exactly as it always did.
     """
     setting = os.environ.get("SONY_HEADPHONES_DEMO", "")
     if setting in ("", "0"):
         return None
+    if setting.lower() in ("xm5", "wh-1000xm5"):
+        return "xm5"
     return "v2" if setting in ("v2", "2") else "v1"
 
 
@@ -4481,8 +5012,11 @@ def demo_link(on_change=None, device=None) -> Link:
     `device` reuses an existing stand-in so its values survive a dropped
     session, the way a real headset's stored settings do.
     """
-    if demo_mode() == "v2":
+    mode = demo_mode()
+    if mode == "v2":
         return DemoLinkV2(on_change=on_change, device=device)
+    if mode == "xm5":
+        return DemoLinkV2(on_change=on_change, device=device, model="WH-1000XM5")
     return DemoLink(on_change=on_change, device=device)
 
 
@@ -4543,6 +5077,12 @@ def direct(request: dict, preferred: str | None) -> dict:
     except (ValueError, TypeError, ArithmeticError) as exc:
         LOG.error("command failed: %s: %s", summary, exc)
         return {"ok": False, "error": str(exc), "state": dict(link.state)}
+    except Reconnecting as exc:
+        # The change is being applied by a reconnect; say so, but as success.
+        state = dict(link.state)
+        state["error"] = str(exc)
+        LOG.info("command applied: %s (%s)", summary, exc)
+        return {"ok": True, "state": state}
     except (NotConnected, OSError) as exc:
         state = dict(link.state)
         state["error"] = str(exc)
@@ -4786,6 +5326,16 @@ def cmd_probe(args) -> int:
         link.refresh()
         print()
         print(describe(link.state))
+        # A v2 device's own description: what adding or checking a model
+        # needs (ADR 0011). Printed raw, since the point is the codes this
+        # plugin does not know yet.
+        functions = link.state.get("functions") or {}
+        for table in ("table1", "table2"):
+            if table in functions:
+                codes = " ".join(f"{code:02x}" for code in functions[table])
+                print(f"  support {table}:  {codes or '-'}")
+        if link.state.get("touch_slot") is not None:
+            print(f"  touch slot:      0x{link.state['touch_slot']:02x}")
     finally:
         link.close()
     return 0

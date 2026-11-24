@@ -124,7 +124,8 @@ TOGGLES = {
 
 # Keys that only exist on one generation. The feature gate normally excludes
 # them, but a stale feature list must not let the tool drive the wrong opcode.
-V1_ONLY = {"touch-sensor", "voice-notifications", "stc-focus-on-voice"}
+# The touch panel is on both: v2 offers it only once a slot names itself.
+V1_ONLY = {"voice-notifications", "stc-focus-on-voice"}
 V2_ONLY = {"connection-quality", "listening-mode", "bgm-room-size"}
 
 # The controls that share the ambient block: writing one moves the others, so
@@ -208,7 +209,10 @@ def choose_value(control: str, state: dict, protocol: str | None,
             return str(MAX_AMBIENT_LEVEL if int(current) != MAX_AMBIENT_LEVEL else 1)
         return str(0 if int(current) != 0 else MAX_AMBIENT_LEVEL)
     elif control == "eq":
-        options = V2_EQ_PRESETS if protocol == "v2" else V1_EQ_PRESETS
+        # A v2 device with the classic six-value equalizer (WH-1000XM5) keeps
+        # the v1 preset table.
+        ten_band = protocol == "v2" and state.get("eq_dialect") != "classic"
+        options = V2_EQ_PRESETS if ten_band else V1_EQ_PRESETS
         for preset in options:
             if preset != current:
                 return preset

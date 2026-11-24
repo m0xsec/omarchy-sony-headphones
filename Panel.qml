@@ -135,7 +135,7 @@ Panel {
     } else if (key === "level") {
       sony.setAmbientLevel(sony.ambientLevel + direction)
     } else if (key === "eq") {
-      sony.choose("eq", "eq_preset", stepOption(Model.eqPresets(sony.state.protocol), sony.state.eq_preset, direction))
+      sony.choose("eq", "eq_preset", stepOption(Model.eqPresets(sony.state.protocol, sony.state.eq_dialect), sony.state.eq_preset, direction))
     } else if (key === "listening-mode") {
       sony.choose("listening-mode", "listening_mode", stepOption(Model.LISTENING_MODE, sony.state.listening_mode, direction))
     } else if (key === "bgm-room-size") {
@@ -530,7 +530,7 @@ Panel {
               rowKey: "eq"
               visible: Model.hasRow(rows, "eq")
               label: "Equalizer"
-              options: Model.eqPresets(sony.state.protocol)
+              options: Model.eqPresets(sony.state.protocol, sony.state.eq_dialect)
               value: String(sony.state.eq_preset || "off")
               onPicked: function(value) { sony.choose("eq", "eq_preset", value) }
               tip: "Equalizer preset — the tone curve the headphones apply"

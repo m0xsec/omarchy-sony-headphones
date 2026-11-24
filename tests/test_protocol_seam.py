@@ -512,12 +512,14 @@ class TestProtocolNegotiation(unittest.TestCase):
             self.assertIsNone(sonyhp.V1Protocol().negotiate(link))
         write.assert_not_called()
 
-    def test_v2_negotiation_runs_the_three_dialect_probes(self):
+    def test_v2_negotiation_reads_support_then_runs_the_three_dialect_probes(self):
         link = sonyhp.Link("AA:BB:CC:DD:EE:FF")
-        with mock.patch.object(link, "select_asc_subtype") as asc, \
+        with mock.patch.object(link, "read_support") as support, \
+                mock.patch.object(link, "select_asc_subtype") as asc, \
                 mock.patch.object(link, "select_eq_subtype") as eq, \
                 mock.patch.object(link, "select_bgm_subtype") as bgm:
             sonyhp.V2Protocol().negotiate(link)
+        support.assert_called_once_with()
         asc.assert_called_once_with()
         eq.assert_called_once_with()
         bgm.assert_called_once_with()
