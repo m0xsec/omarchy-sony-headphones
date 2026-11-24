@@ -390,6 +390,25 @@ class TestStubbornCoversEverySetting(unittest.TestCase):
         "listening-mode": "cinema",
         "bgm-room-size": "cafe",
         "playback-source": "11:22:33:44:55:66",
+        "touch-sensor": "off",
+    }
+    # The XM5 stand-in: classic equalizer (clear bass + five), no listening
+    # mode or multipoint list, connection quality under subtype 0x00.
+    XM5_PROBES = {
+        "nc": "off",
+        "ambient-level": 17,
+        "focus-on-voice": "on",
+        "eq": "vocal",
+        "eq-bands": "1,0,-1,-2,-3,-4",
+        "auto-power-off": "off",
+        "stc-sensitivity": "low",
+        "stc-timeout": "long",
+        "dsee": "on",
+        "speak-to-chat": "on",
+        "pause-when-taken-off": "off",
+        "voice-notifications": "off",
+        "connection-quality": "stable",
+        "touch-sensor": "off",
     }
 
     def check_device(self, make_link, exclusive, probes, skip):
@@ -433,6 +452,12 @@ class TestStubbornCoversEverySetting(unittest.TestCase):
         # reaches the device and there is no branch to guard.
         self.check_device(sonyhp.DemoLinkV2, sonyhp.V1_ONLY_SETTINGS,
                           self.V2_PROBES, ("stc-focus-on-voice",))
+
+    def test_xm5_stubborn_holds_every_supported_setting(self):
+        def make_link():
+            return sonyhp.DemoLinkV2(model="WH-1000XM5")
+        self.check_device(make_link, sonyhp.V1_ONLY_SETTINGS,
+                          self.XM5_PROBES, ("stc-focus-on-voice",))
 
 
 if __name__ == "__main__":

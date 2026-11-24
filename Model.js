@@ -32,8 +32,10 @@ var EQ_PRESETS = [
   { value: "manual", label: "Manual" }
 ]
 
-// The v2 generation dropped the classic preset table: firmware accepts only
-// these codes, plus Custom and Off.
+// The ten-band v2 equalizer (WH-1000XM6) dropped the classic preset table:
+// firmware accepts only these codes, plus Custom and Off. A v2 device that
+// keeps the classic six-value equalizer (WH-1000XM5) reports eq_dialect
+// "classic" and keeps the classic table.
 var EQ_PRESETS_V2 = [
   { value: "off", label: "Off" },
   { value: "heavy", label: "Heavy" },
@@ -43,8 +45,8 @@ var EQ_PRESETS_V2 = [
   { value: "custom", label: "Custom" }
 ]
 
-function eqPresets(protocol) {
-  return protocol === "v2" ? EQ_PRESETS_V2 : EQ_PRESETS
+function eqPresets(protocol, dialect) {
+  return protocol === "v2" && dialect !== "classic" ? EQ_PRESETS_V2 : EQ_PRESETS
 }
 
 var AUTO_POWER_OFF = [

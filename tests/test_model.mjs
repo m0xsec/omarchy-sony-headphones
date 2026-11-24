@@ -322,6 +322,10 @@ test("eqPresets follows the protocol", function() {
     "off", "heavy", "clear", "hard", "soft", "custom"
   ])
   assert.deepEqual(values(Model.eqPresets(null)), values(Model.eqPresets("v1")))
+  // A v2 device with the classic six-value equalizer (WH-1000XM5) keeps the
+  // classic table; the ten-band dialect, or none reported yet, gets v2's.
+  assert.deepEqual(values(Model.eqPresets("v2", "classic")), values(Model.eqPresets("v1")))
+  assert.deepEqual(values(Model.eqPresets("v2", "ten-band")), values(Model.eqPresets("v2")))
 })
 
 test("autoPowerOffOptions follows the timer feature", function() {

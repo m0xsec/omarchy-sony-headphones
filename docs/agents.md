@@ -66,7 +66,7 @@ One line each.
 | `README.md` | Owner-facing overview, install, gestures and settings tables. |
 | `Makefile` | The gate and dev helpers: `test`, `lint`, `qmltest`, `check`, `demo`, `verify`, `doctor`. |
 | `docs/agents.md` | This file. |
-| `docs/adr/` | The nine architecture decisions: security, seams, sessions, framing. |
+| `docs/adr/` | The eleven architecture decisions: security, seams, sessions, framing, capabilities. |
 | `docs/wiki/` | Reader-facing pages: the usage guide and the architecture write-up. |
 | `tests/` | The Python suite, the JS harness and the QML tests. |
 | `tools/verify.py` | On-hardware write-then-read-back verifier for what a device honours. |
@@ -185,11 +185,16 @@ The 18 `SETTING_KEYS` (the CLI's accepted keys, `bin/sony-headphones`):
 
 Whether a key is offered is decided by `_setting_context` in each builder:
 
-- **Cross-generation refusal first.** `V1_ONLY_SETTINGS = {"touch-sensor"}` is
-  refused by the v2 builder; `V2_ONLY_SETTINGS = {"connection-quality",
+- **Cross-generation refusal first.** `V1_ONLY_SETTINGS` is empty now that
+  `touch-sensor` exists on both generations; `V2_ONLY_SETTINGS = {"connection-quality",
   "listening-mode", "bgm-room-size", "playback-source"}` is refused by the v1
   builder. `stc-focus-on-voice` maps to the shared `speak-to-chat` feature, so
   the v2 builder refuses it explicitly.
+- **v2 discovery next.** On a v2 link the device's support lists and slot
+  names refine the feature set during negotiation (`refine_v2_features`, ADR
+  0011): a pinned feature the device does not list is withheld, and
+  `touch-sensor` is offered only where a slot names itself
+  `TOUCH_PANEL_SETTING`. The table below is the model table before that step.
 - **Then the feature gate.** `SETTING_FEATURES` maps a key to the feature it
   needs (`eq`/`eq-bands` → `equalizer`, `stc-*` → `speak-to-chat`,
   `bgm-room-size` → `listening-mode`, `playback-source` → `multipoint`, and so
@@ -220,8 +225,8 @@ Headers: `amb` = `ambient-level`, `fov` = `focus-on-voice`, `eqb` = `eq-bands`,
 | WH-1000XM3 | XM3 | Y | Y | Y | Y | Y | Y | . | . | . | . | . | Y | Y | Y | . | . | . | . |
 | WH-1000XM2 | XM2 | Y | Y | Y | Y | Y | Y | . | . | . | . | . | . | . | . | . | . | . | . |
 | other v1 | ceiling | Y | Y | Y | Y | Y | Y | Y | Y | Y | Y | Y | Y | Y | Y | . | . | . | . |
-| WH-1000XM6 | XM6 | Y | Y | Y | Y | Y | Y | Y | Y | Y | . | Y | . | Y | Y | Y | Y | Y | Y |
-| WH-1000XM5 | WH-1000XM5 | Y | Y | Y | Y | Y | Y | Y | Y | Y | . | Y | . | Y | Y | Y | . | . | . |
+| WH-1000XM6 | XM6 | Y | Y | Y | Y | Y | Y | Y | Y | Y | . | Y | D | Y | Y | Y | Y | Y | Y |
+| WH-1000XM5 | WH-1000XM5 | Y | Y | Y | Y | Y | Y | Y | Y | Y | . | Y | D | Y | Y | Y | . | . | . |
 | WF-1000XM5 | WF-1000XM5 | Y | Y | Y | Y | Y | Y | Y | Y | Y | . | Y | . | . | Y | Y | . | . | . |
 | LinkBuds S | LinkBuds S | Y | Y | Y | Y | Y | Y | Y | Y | Y | . | Y | . | . | Y | . | . | . | . |
 | LinkBuds | LinkBuds | Y | Y | Y | Y | Y | Y | Y | Y | Y | . | Y | . | . | Y | . | . | . | . |
@@ -230,6 +235,12 @@ Headers: `amb` = `ambient-level`, `fov` = `focus-on-voice`, `eqb` = `eq-bands`,
 
 Notes the table cannot carry:
 
+- **`D` = discovered.** On v2 the touch panel is never in a model set; it is
+  offered when the device names a slot for it. The WH-1000XM5 names slot
+  `0xd1` (capture, gabamnml PR #3) and the WH-1000XM6 slot `0xd3` (capture,
+  firmware 3.1.5). Switching it off enables fixed-message alerts first and
+  answers the headphones' confirmation; the XM5 then reconnects to apply it.
+  The XM6's off switch is not yet written on hardware.
 - **Touch sensor on the XM4** reads `.` on purpose: the hardware answers
   "still on" to every disable, so the set omits `touch-sensor` rather than
   drawing a dead row.
@@ -240,8 +251,13 @@ Notes the table cannot carry:
 - **`voice-notifications` on v2** is confirmed on the WH-1000XM6 (firmware
   3.1.5) and reported on the WH-1000XM5; the `v2 ceiling` row offers it to any
   unrecognised v2 model as an over-offer pending capture.
-- **`eq-bands` shape follows the generation:** v1 takes 6 values (clear bass +
-  5 bands, each -10..10); v2 takes 10 values (each -6..6, stored biased by 6).
+- **`eq-bands` shape follows the equalizer dialect:** v1 and the v2 classic
+  dialect (WH-1000XM5, `eq_dialect: "classic"`) take 6 values (clear bass + 5
+  bands, each -10..10) and the v1 preset names; the v2 ten-band dialect
+  (WH-1000XM6) takes 10 values (each -6..6, stored biased by 6) and its own
+  preset table. The dialect is read from the reply's band count.
+- **`connection-quality` subtype:** `0x00` on a device that lists support
+  function `0xe1` (WH-1000XM5), `0x02` otherwise (WH-1000XM6).
 - **`listening-mode` is XM6-only** among the named v2 sets, because only the
   XM6 carries the `listening-mode` feature.
 - The model-by-model research that these sets come from — including the
@@ -628,6 +644,11 @@ lives in [adr/](adr/) and [wiki/architecture.md](wiki/architecture.md).
 | `V2_CONNECTION_QUALITY_*` | Connection-quality values |
 | `MAX_AMBIENT_LEVEL` | Ambient slider ceiling |
 | `V2_ASC_SUBTYPES` / `V2_ASC_PROBE_ORDER` | v2 ambient dialect probe order |
+| `V2_SUPPORT_*` / `V2_FN_*` / `V2_FN2_*` | v2 support-function lists and the function codes pinned by an XM5 or XM6 capture |
+| `V2_FN_FEATURES` | Feature to the support codes that carry it; only these features are withheld on the list's strength |
+| `V2_SETTING_*` / `V2_TOUCH_PANEL_SETTING` | v2 general-settings slots (capability query, value family) and the touch panel's slot name |
+| `V2_ALERT_*` | v2 alerts: the touch-panel-off confirmation and its reconnect variant |
+| `V2_BATTERY_WITH_THRESHOLD` / `V2_AUDIO_SUB_CONNECTION_MODE` | Battery subtype for function 0x28; connection-quality subtype for function 0xe1 (XM5) |
 
 ### Request builders
 
@@ -643,7 +664,10 @@ lives in [adr/](adr/) and [wiki/architecture.md](wiki/architecture.md).
 | `stc_config_request` | v1 speak-to-chat config |
 | `v2_audio_codec_get` / `v2_dsee_get` / `v2_dsee_request` / `v2_connection_quality_get` / `v2_connection_quality_request` / `v2_cinema_get` / `v2_cinema_request` / `v2_bgm_get` / `v2_bgm_request` | v2 audio-family builders |
 | `v2_asc_request` / `v2_asc_get` | v2 noise-control / ambient |
-| `v2_eq_get` / `v2_eq_preset_request` / `v2_eq_bands_request` | v2 equalizer |
+| `v2_eq_get` / `v2_eq_preset_request` / `v2_eq_bands_request` / `v2_eq_classic_bands_request` | v2 equalizer, ten-band (XM6) and classic clear-bass + five (XM5) dialects |
+| `v2_support_requests` / `v2_setting_capability_requests` | v2 discovery: the two support lists, then each listed general-settings slot's name |
+| `v2_battery_get` | v2 battery under the discovered subtype |
+| `v2_touch_get` / `v2_touch_requests` / `alert_confirmation` | v2 touch panel in its named slot; the off switch's alert, and the one yes this plugin ever answers |
 | `v2_system_get` / `v2_stc_enabled_request` / `v2_bool_request` / `v2_stc_config_request` / `v2_auto_power_off_request` / `v2_stc_get` / `v2_apo_get` | v2 system / speak-to-chat |
 | `v2_device_list_get` / `v2_source_switch_request` | v2 multipoint |
 | `v2_pause_source_request` | v2 remote playback control (`PLAY_SET_STATUS` pause), forwarded by the headset to the current playback source |
@@ -659,6 +683,7 @@ lives in [adr/](adr/) and [wiki/architecture.md](wiki/architecture.md).
 | `_apply_firmware` / `_apply_codec` / `_apply_battery` | Small shared field parsers |
 | `parse_v2_device_list` | Decode the v2 multipoint peer list |
 | `derive_listening_mode` | BGM/cinema flags to one listening mode |
+| `v2_functions` / `v2_connection_subtype` | Read the listed support functions; the connection-quality subtype (0x00 is real, so only `None` defaults) |
 | `_bool` | Byte to `True`/`False`/`None` |
 
 ### SDP discovery
@@ -733,7 +758,9 @@ lives in [adr/](adr/) and [wiki/architecture.md](wiki/architecture.md).
 | `Link.dispatch` / `Link.pump` | Fold frames into state; pump for a window |
 | `Link.notify_change` | Fan a state change made outside dispatch out to the owner via `on_change` |
 | `Link.request` / `Link.refresh` | Send a request list and settle |
-| `Link._select_subtype` / `select_asc_subtype` / `select_eq_subtype` / `select_bgm_subtype` | v2 dialect probes |
+| `Link._select_subtype` / `select_asc_subtype` / `select_eq_subtype` / `select_bgm_subtype` | v2 dialect probes, narrowed to one candidate when the support list decides |
+| `Link.read_support` | v2 discovery: support lists, slot names, battery and connection subtypes |
+| `Link.confirm_alerts` / `Link.expect_drop` / `Link._flush` | Answer the touch-panel confirmation only while asked for; send it after dispatch; remember a drop the device announced |
 | `Link.poll_requests` / `Link.power_off` | Periodic liveness ask; power off via the adapter |
 | `configure_link` | Stamp device identity, then `Link.connect` |
 
@@ -745,11 +772,12 @@ lives in [adr/](adr/) and [wiki/architecture.md](wiki/architecture.md).
 | `parse_bool` | Boolean parser incl. `toggle` |
 | `next_nc_mode` | NC / ambient / off cycle |
 | `SETTING_FEATURES` | Setting key to required feature |
-| `V1_ONLY_SETTINGS` / `V2_ONLY_SETTINGS` | Keys each builder refuses across generations (v1-only is only `touch-sensor`; `voice-notifications` is on both, v2 scoped to WH-1000XM5/XM6) |
+| `V1_ONLY_SETTINGS` / `V2_ONLY_SETTINGS` | Keys each builder refuses across generations (v1-only is now empty: `touch-sensor` is on both, v2 only where a slot names itself; `voice-notifications` is on both, v2 scoped to WH-1000XM5/XM6) |
 | `SettingContext` | Named tuple of the shared preamble fields |
 | `_setting_context` | Shared gate: exclusivity, features, ambient and v2 discovery fields |
 | `setting_requests` | v1: key + value to requests |
 | `setting_requests_v2` | v2: key + value to requests (incl. the inverted 3-byte `voice-notifications` shape) |
+| `Reconnecting` | A `NotConnected` the device announced: the change is applied by a reconnect, so the daemon reports success and does not retry |
 | `apply_setting` | Mark the key pending (clearing a prior refusal), write then pump until the read-back moves or `SETTLE_TIMEOUT`, recording a refusal on a no-move settle; a BGM key that raises is remembered in `Link.interrupted_key` |
 | `_mark_pending` / `_settle_pending` | Publish/clear the `pending` key and record a `refused` entry |
 
@@ -763,15 +791,19 @@ lives in [adr/](adr/) and [wiki/architecture.md](wiki/architecture.md).
 | `UI_FEATURES` | Presentation-only markers (e.g. `eq-sbc-only`), exempt from the ceiling check |
 | `ALL_FEATURES` | Union, only for a device with no known protocol |
 | `features_for` | The controls a named device should be offered |
+| `V2_DISCOVERED_FEATURES` | v2 controls offered only once the device describes them (`touch-sensor`) |
+| `refine_v2_features` | Narrow a v2 feature list by the device's support lists; add the touch panel when its slot was found |
 
 ### Demo mode
 
 | Symbol | Role |
 | --- | --- |
 | `DemoDevice` / `DemoLink` | v1 stand-in device and link |
-| `DemoDeviceV2` / `DemoLinkV2` | v2 stand-in device and link (carries inverted `voice_notifications`) |
+| `DemoDeviceV2` / `DemoLinkV2` | v2 stand-in device (WH-1000XM6, with its captured support lists and slot names) and link; the link negotiates like a real one |
+| `DemoDeviceXM5` / `DEMO_V2_MODELS` | WH-1000XM5 stand-in from the gabamnml PR #3 captures (`SONY_HEADPHONES_DEMO=xm5`); model name to stand-in class |
+| `_capability_reply` | A general-settings slot naming itself, for the stand-ins |
 | `DemoDevice.stubborn` / `DemoDeviceV2.stubborn` | Opt-in flag (off by default) that acknowledges a write without changing the value |
-| `demo_mode` | Read `SONY_HEADPHONES_DEMO`; `v1`, `v2` or off |
+| `demo_mode` | Read `SONY_HEADPHONES_DEMO`; `v1`, `v2`, `xm5` or off |
 | `demo_link` | Build the stand-in Link for the selected demo |
 
 ### Logging and the trace file
