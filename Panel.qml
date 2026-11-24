@@ -47,6 +47,8 @@ Panel {
   // Clamped to the daemon's bounds so a hand-edited shell.json (0, 200000)
   // cannot forward a value the daemon refuses.
   readonly property int idleSeconds: Model.clampSessionIdle(setting("idleSeconds", Model.SESSION_IDLE_DEFAULT))
+  // A command for touch and hold on the earcup; empty does nothing here.
+  readonly property string holdAction: String(setting("holdAction", "") || "").trim()
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
@@ -72,6 +74,7 @@ Panel {
     sessionPolicy: root.sessionPolicy
     idleSeconds: root.idleSeconds
     pauseOnSwitch: root.pauseOnSwitch
+    holdAction: root.holdAction
     onChanged: root.ensureCursor()
   }
 

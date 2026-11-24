@@ -149,6 +149,7 @@ Configured from the shell's widget settings, or directly on the entry in
 | `sessionPolicy` | `hold` | `hold` keeps the one control session; `on-demand` releases it after the idle delay so a phone can take over |
 | `idleSeconds` | `30` | Quiet seconds before an `on-demand` session is released; only used by `on-demand` |
 | `pauseOnSwitch` | `On` | Keep one multipoint device playing: pause this computer when the headphones switch to another device, and pause that device when media starts here |
+| `holdAction` | — | A command to run here when you touch and hold the earcup, such as `voxtype record toggle`; v2 headphones, while this computer holds the session |
 
 A Sony headset holds exactly one control session at a time: while this plugin's
 daemon owns it, a phone paired over multipoint cannot take it, and the reverse.

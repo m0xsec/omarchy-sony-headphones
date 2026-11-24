@@ -25,7 +25,8 @@
       "address": "",
       "logging": "errors",
       "sessionPolicy": "hold",
-      "idleSeconds": 30
+      "idleSeconds": 30,
+      "holdAction": ""
     },
     "schema": [
       {
@@ -75,6 +76,13 @@
         "max": 86400,
         "defaultValue": 30,
         "description": "Only used when the control session is set to on-demand. Quiet seconds before the daemon hands the session back; any command restarts the count."
+      },
+      {
+        "key": "holdAction",
+        "type": "string",
+        "label": "Touch and hold runs",
+        "defaultValue": "",
+        "description": "Optional. A command to run on this computer when you touch and hold the earcup, for example `voxtype record toggle` to start and stop dictation. Runs only while this computer holds the control session (v2 headphones). The headphones still send the hold to the assistant on a connected phone, if one is set up in Sound Connect."
       }
     ]
   }

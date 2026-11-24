@@ -23,7 +23,7 @@ const names = [
   "present", "hasState", "SESSION_IDLE_MIN", "SESSION_IDLE_MAX",
   "SESSION_IDLE_DEFAULT", "clampSessionIdle", "settingKeyForRow", "isPending",
   "refusedReason", "refusedSummary", "pausesLocalPlayback", "availabilityFor",
-  "eqBlockedByCodec", "codecOptions"
+  "eqBlockedByCodec", "codecOptions", "holdTriggered"
 ]
 const Model = new Function(source + `\nreturn { ${names.join(", ")} }`)()
 
@@ -557,6 +557,26 @@ test("codec and connection quality grey out while the audio link settles", funct
   assert.equal(Model.availabilityFor(settling, "codec").available, false)
   assert.equal(Model.availabilityFor(settling, "connection-quality").available, false)
   assert.equal(Model.availabilityFor({ connected: true }, "codec").available, true)
+})
+
+test("holdTriggered fires once per new touch-and-hold", function() {
+  var line = function(seq, event, connected) {
+    return { connected: connected !== false, event_seq: seq, last_event: event }
+  }
+  assert.equal(Model.holdTriggered(line(3, "opGoogle"), line(4, "keyRHold")), true)
+  // The same hold again is a new count, so it fires again.
+  assert.equal(Model.holdTriggered(line(4, "keyRHold"), line(5, "keyRHold")), true)
+  // Nothing new: a line that repeats the count is not another hold.
+  assert.equal(Model.holdTriggered(line(5, "keyRHold"), line(5, "keyRHold")), false)
+  // Other gestures and actions do not run it.
+  assert.equal(Model.holdTriggered(line(5, "keyRHold"), line(6, "keyRDoubleTap")), false)
+  assert.equal(Model.holdTriggered(line(5, "keyRHold"), line(6, "opGoogle")), false)
+  // A widget's first line, and a fresh daemon's, never replay an old hold.
+  assert.equal(Model.holdTriggered({ connected: false }, line(7, "keyRHold")), false)
+  assert.equal(Model.holdTriggered(null, line(7, "keyRHold")), false)
+  assert.equal(Model.holdTriggered(line(7, "keyRHold"), line(0, null)), false)
+  // A released session's snapshot is not a live hold.
+  assert.equal(Model.holdTriggered(line(7, "opNext"), line(8, "keyRHold", false)), false)
 })
 
 test("remoteSource is another peer owning playback", function() {

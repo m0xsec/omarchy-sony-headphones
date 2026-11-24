@@ -259,6 +259,16 @@ function remotePlaybackStarted(before, after, local) {
   return was !== now
 }
 
+// Whether a state line carries a new touch-and-hold from the headset. Each
+// event moves `event_seq`, so a repeated hold is still seen; the first line a
+// widget gets (no earlier count) and a fresh daemon's (no event) never fire, so
+// a restart cannot replay an old gesture.
+function holdTriggered(before, after) {
+  if (!after || !after.connected || after.last_event !== "keyRHold") return false
+  if (!before || typeof before.event_seq !== "number") return false
+  return after.event_seq !== before.event_seq
+}
+
 // A peer that takes the headset and reports a pause within this was a blip —
 // a phone's autoplay on unlock plays 1-5 s at a time on a WH-1000XM6 — so the
 // local players paused for it resume. Past it, the switch was real playback.

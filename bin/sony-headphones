@@ -479,6 +479,54 @@ V2_BATTERY_WITH_THRESHOLD = 0x08
 V2_AUDIO_SUB_CONNECTION_MODE = 0x00
 
 
+# The headset's event log, sent unprompted on table 1 while the session is
+# held: `c9 01` and three length-prefixed ASCII strings, one or two of them
+# set. `key*` names a gesture (`keyRHold` is touch and hold, `keyRDoubleTap`,
+# `keyRRightFlick`…), `op*` the action the headset took for it (`opGoogle`,
+# `opPause`, `opNext`…), `unit*` a wear change and `mp*` a multipoint hand-off.
+# Seen on a WH-1000XM6 (firmware 3.1.5, 2026-11-23); a hold does not always
+# carry an `op*`, and nothing marks its release. The strings come from the
+# device, so only short plain identifiers are kept (ADR 0009).
+V2_EVENT_NOTIFY = 0xC9
+V2_EVENT_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,31}$")
+V2_EVENT_HOLD = "keyRHold"
+
+# Wear detection: `f5 10 01 <state>`, 0x00 worn and 0x01 taken off, sent on
+# connect and on every change (WH-1000XM6, 2026-11-23).
+V2_WEAR_NOTIFY = 0xF5
+V2_WEAR_SUB = 0x10
+
+
+def parse_v2_event(payload: bytes) -> list[str]:
+    """The event names in one `c9` frame, in order; empty if it is not one.
+
+    Each string is length-prefixed; a frame whose lengths overrun it, or a
+    name that is not a short plain identifier, yields nothing rather than a
+    partial read.
+    """
+    if len(payload) < 2 or payload[0] != V2_EVENT_NOTIFY or payload[1] != 0x01:
+        return []
+    names = []
+    index = 2
+    while index < len(payload):
+        length = payload[index]
+        index += 1
+        if index + length > len(payload):
+            return []
+        if length:
+            try:
+                name = payload[index:index + length].decode("ascii")
+            except UnicodeDecodeError:
+                return []
+            if not V2_EVENT_NAME_RE.match(name):
+                return []
+            names.append(name)
+        index += length
+        if len(names) > 3:
+            return []
+    return names
+
+
 def v2_pause_source_request() -> tuple[int, bytes]:
     return req(bytes([V2_PLAY_SET_STATUS, V2_PLAY_TYPE_PLAYBACK_CONTROL, 0x00,
                       V2_PLAY_CONTROL_PAUSE]))
@@ -1290,6 +1338,14 @@ def initial_state() -> dict:
         # Whether the current playback source says it is playing (v2 only):
         # True, False, or None until the headset reports it.
         "source_playing": None,
+        # Whether the headphones are on someone's head (v2 wear detection):
+        # True, False, or None until the headset reports it.
+        "worn": None,
+        # The headset's last event (`keyRHold`, `opNext`…) and a counter that
+        # moves with every one, so the widget can act on each exactly once:
+        # a repeated gesture leaves `last_event` unchanged but not the count.
+        "last_event": None,
+        "event_seq": 0,
         "bgm_room_size": None,
         "bgm_subtype": None,
         "bgm_enabled": False,
@@ -1482,6 +1538,19 @@ def apply_payload_v2(state: dict, msg_type: int, payload: bytes) -> bool:
         if code in (VOICE_NOTIFICATIONS_RET, VOICE_NOTIFICATIONS_NOTIFY) and len(payload) >= 3 \
                 and payload[1] == 0x01 and payload[2] in (0x00, 0x01):
             state["voice_notifications"] = payload[2] == 0x00
+        return state != before
+
+    if code == V2_EVENT_NOTIFY:
+        names = parse_v2_event(payload)
+        for name in names:
+            state["event_seq"] = int(state.get("event_seq") or 0) + 1
+            state["last_event"] = name
+            LOG.info("headset event: %s", name)
+        return state != before
+
+    if code == V2_WEAR_NOTIFY and len(payload) == 4 and payload[1] == V2_WEAR_SUB \
+            and payload[2] == 0x01 and payload[3] in (0x00, 0x01):
+        state["worn"] = payload[3] == 0x00
         return state != before
 
     if code in (V2_PLAY_RET_STATUS, V2_PLAY_NTFY_STATUS) and len(payload) >= 4 \
@@ -5610,6 +5679,7 @@ def describe(state: dict) -> str:
         add("  sensitivity", state.get("stc_sensitivity"))
         add("  timeout", state.get("stc_timeout"))
         add("  focus on voice", state.get("stc_focus_on_voice"))
+    add("Worn", state.get("worn"))
     add("Pause when taken off", state.get("pause_when_taken_off"))
     add("Auto power off", state.get("auto_power_off"))
     add("Touch sensor", state.get("touch_sensor"))
