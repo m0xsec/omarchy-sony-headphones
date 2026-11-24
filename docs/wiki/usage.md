@@ -123,6 +123,7 @@ in `~/.config/omarchy/shell.json`:
 | `sessionPolicy` | `hold` | `hold` keeps the one control session; `on-demand` releases it after the idle delay so a phone can take over |
 | `idleSeconds` | `30` | Quiet seconds before an `on-demand` session is released; only used by `on-demand` |
 | `pauseOnSwitch` | `On` | Keep one multipoint device playing: pause this computer when the headphones switch to another device, and pause that device when media starts here |
+| `holdAction` | — | A command to run here when you touch and hold the earcup, such as `voxtype record toggle`; v2 headphones, while this computer holds the session |
 
 `sessionPolicy` and `idleSeconds` only make sense once you know what the
 control session is; it is explained under [The control
@@ -153,11 +154,24 @@ model that does not honour one does not get the row.
 The touch panel's gestures — double tap to play or pause, flicks for next,
 previous and volume — are the headphones' own and work whatever this plugin
 does. **Touch and hold** is the assistant gesture: it calls up Google Assistant
-(or the assistant set in Sound Connect) on the phone it is set up for, and does
-nothing on this computer. The helper does see it: a hold arrives on the
-control channel as a `keyRHold` / `opGoogle` event (see the
-[agents reference](../agents.md#v2-notifications-seen-but-not-decoded)), so it
-could be bound to a desktop action in future, but nothing acts on it yet.
+(or the assistant set in Sound Connect) on the phone it is set up for. On v2
+headphones the hold also reaches this computer, and the `holdAction` widget
+setting runs a command for it — for example, to start and stop dictation with
+Voxtype:
+
+```bash
+omarchy bar set gabamnml.sony-headphones holdAction "voxtype record toggle"
+```
+
+Each hold runs the command once; there is no release to wait for, so a toggle
+is the natural fit. It runs only while this computer holds the control
+session, and the phone's assistant still answers the same hold if one is set
+up, so set the assistant to none in Sound Connect if you want the hold to be
+this computer's alone. The command is yours, run as you would from a
+terminal; nothing the headphones send is ever put into it.
+
+The helper also reads wear detection: `status` shows whether the headphones
+are on your head.
 
 The codec is this computer's choice rather than the headphones', so the row
 comes from PipeWire, which offers one profile per codec the pair can use, and

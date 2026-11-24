@@ -23,6 +23,9 @@ Item {
   // Pause the local media players when the headset switches playback to
   // another device.
   property bool pauseOnSwitch: true
+  // What touch and hold on the earcup runs on this computer, from the widget
+  // setting. Empty does nothing here.
+  property string holdAction: ""
 
   property var state: ({ connected: false })
   property string lastError: ""
@@ -226,6 +229,13 @@ Item {
     onTriggered: root.switchPaused = []
   }
 
+  // The user's own command, run in the shell's session environment so it can
+  // reach Wayland, audio and its own daemons. Nothing from the headphones is
+  // ever put into it: the event only decides whether it runs.
+  function runHoldAction() {
+    Quickshell.execDetached(["bash", "-lc", holdAction])
+  }
+
   // The other half of pauseOnSwitch. A desktop player that starts while
   // another peer (a phone) still owns playback would make the headset switch
   // here while the phone keeps playing, and auto-switch then fights over it.
@@ -352,6 +362,7 @@ Item {
     try {
       var next = JSON.parse(text)
       if (pauseOnSwitch) followSource(state, next)
+      if (holdAction !== "" && Model.holdTriggered(state, next)) runHoldAction()
       state = next
       starting = false
       lastError = String(state.error || "")

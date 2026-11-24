@@ -22,7 +22,7 @@ replaced.
 
 ## The historical layer
 
-- [../adr/](../adr/) holds the architecture decision records (ADR 0001–0012):
+- [../adr/](../adr/) holds the architecture decision records (ADR 0001–0013):
   the security invariants, the two seams, the capability model, the session
   policy and the threat model. These are the source of truth for wire-format
   and security rules.

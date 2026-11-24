@@ -66,7 +66,7 @@ One line each.
 | `README.md` | Owner-facing overview, install, gestures and settings tables. |
 | `Makefile` | The gate and dev helpers: `test`, `lint`, `qmltest`, `check`, `demo`, `verify`, `doctor`. |
 | `docs/agents.md` | This file. |
-| `docs/adr/` | The twelve architecture decisions: security, seams, sessions, framing, capabilities, the codec. |
+| `docs/adr/` | The thirteen architecture decisions: security, seams, sessions, framing, capabilities, the codec, headset events. |
 | `docs/wiki/` | Reader-facing pages: the usage guide and the architecture write-up. |
 | `tests/` | The Python suite, the JS harness and the QML tests. |
 | `tools/verify.py` | On-hardware write-then-read-back verifier for what a device honours. |
@@ -612,18 +612,29 @@ DSEE Extreme on v2 is the exception: not inverted, `0x01` = on. On v1, DSEE
 (`0xE8` subtype `0x02`) and voice guidance (`0x48 01 01 VV`) are non-inverted
 too, which is why the generations never share a boolean builder.
 
+### v2 notifications: events and wear (decoded)
+
+A WH-1000XM6 (firmware 3.1.5) sends these unprompted on table 1 while the
+session is held (2026-11-23 trace). Both are parsed (ADR 0013):
+
+| Frame | Seen when | State |
+|---|---|---|
+| `c9 01 <len><key> <len><value> <count> <sub-entries…>` | Every touch gesture, button press, wear change and multipoint hand-off, once the operation log is on (`c4 01 00`) | `last_event` (the name) and `event_seq` (moves with every event). libmdr's `NotifyLogParamTimeSeriesOperationLog`: a length-prefixed operation key and value, one or both set, then a counted list of key/value sub-entries the parser does not read. `key*` names the gesture, `op*` the action the headset took, `unit*` wear, `mp*` multipoint. Only plain identifiers of up to 32 characters are kept (`parse_v2_event`). |
+| `f5 10 01 <01/00>` | On connect, and taking the headset off / putting it on | `worn`: `00` worn, `01` removed |
+
+The widget runs the `holdAction` setting on a new `keyRHold`
+(`Model.holdTriggered`, `Service.runHoldAction`).
+
 ### v2 notifications seen but not decoded
 
-A WH-1000XM6 (firmware 3.1.5) sends these unprompted on table 1 unless noted.
-They were read from a live trace on 2026-11-23; the parser ignores them today.
-They are recorded here so a feature built on one starts from the bytes.
+Also unprompted on table 1 unless noted, from the same trace; the parser
+ignores them. They are recorded here so a feature built on one starts from the
+bytes.
 
 | Frame | Seen when | Reading |
 |---|---|---|
-| `c9 01 <len><str> <len><str> <len><str>` | Every touch gesture, button press, wear change and multipoint hand-off | An event log: three length-prefixed ASCII strings, one of them set. `key*` names the gesture, `op*` the action the headset took, `unit*` wear, `mp*` multipoint. |
 | `a9 20 <level>` | Volume changes, from the touch panel or the source | Volume level (seen 4–8) |
 | `a9 01 …` | A track starts or changes on the playing source | Now-playing metadata relayed from the source: length-prefixed title and artist strings |
-| `f5 10 01 <01/00>` | Taking the headset off / putting it on | Wear state: `01` removed, `00` worn |
 | `55 04 01 01 02` / `55 04 00 00` | Listening mode moved to Background music or Cinema / back to Standard | Equalizer availability, apparently: unavailable while either effect is on |
 | `e5 <sub> …` | Around listening-mode and touch-panel changes, and on connect | Unknown; subtypes `01`, `04` and `09` seen |
 | table 2 `3d 01 00 <MAC>` | Choosing a playback source | The new playback source's address |
@@ -642,10 +653,9 @@ The `c9` strings seen so far:
 | `unitRemove` / `unitWear` | none; wear detection, paired with the `f5 10` frame |
 | — | `mpChgA2dp`: multipoint moved the A2DP stream |
 
-So the helper *can* see touch-and-hold even though nothing on the desktop acts
-on it: holding the panel produces `keyRHold` and `opGoogle` on the control
-channel. Binding it to a desktop action would mean decoding `c9` into an event
-and having the daemon run something on it; nothing does that yet.
+A hold carries no release, and does not always carry an `op*`: one hold in the
+trace produced `keyRHold` alone. So the gesture, not the action, is what the
+widget keys on.
 
 ## Helper symbol map: `bin/sony-headphones`
 
@@ -728,6 +738,9 @@ lives in [adr/](adr/) and [wiki/architecture.md](wiki/architecture.md).
 | `v2_touch_get` / `v2_touch_requests` / `alert_confirmation` | v2 touch panel in its named slot; the off switch's alert, and the one yes this plugin ever answers |
 | `v2_system_get` / `v2_stc_enabled_request` / `v2_bool_request` / `v2_stc_config_request` / `v2_auto_power_off_request` / `v2_stc_get` / `v2_apo_get` | v2 system / speak-to-chat |
 | `v2_device_list_get` / `v2_source_switch_request` | v2 multipoint |
+| `parse_v2_event` / `V2_EVENT_NOTIFY` / `V2_EVENT_NAME_RE` / `V2_EVENT_HOLD` | Decode the `c9 01` operation log (key, value, then unread sub-entries) into names; plain identifiers only |
+| `v2_operation_log_request` / `V2_LOG_SET_STATUS` / `V2_LOG_TIME_SERIES` | `c4 01 00`: ask the headset to send its operation log; sent during negotiation (`Link.read_support`) |
+| `V2_WEAR_NOTIFY` / `V2_WEAR_SUB` | Wear detection, `f5 10 01 <state>` |
 | `v2_pause_source_request` | v2 remote playback control (`PLAY_SET_STATUS` pause), forwarded by the headset to the current playback source |
 | `v2_refresh_requests` | Full post-connect v2 query list (incl. the 3-byte voice-guidance GET) |
 

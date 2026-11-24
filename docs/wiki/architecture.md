@@ -573,6 +573,12 @@ without a new ADR.
   audio link the daemon publishes `audio_settling`, so the headset's brief
   report of another source never pauses the desktop.
 
+- **[0013 — Act on headset events in the
+  widget](../adr/0013-act-on-headset-events-in-the-widget.md).** The helper
+  decodes the headset's event log and wear state into plain state fields; the
+  widget runs the user's `holdAction` command for a new touch and hold, in the
+  shell's session environment, with nothing from the device in the command.
+
 ## Tests
 
 `tests/` mirrors the seams:
