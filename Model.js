@@ -231,28 +231,32 @@ function playbackSource(state) {
 // report the active source's address; while this machine is the one playing that
 // address names the local source, so choosing any other peer is switching
 // playback away and the local players should pause. Selection-only: consulted
-// when the user picks a source; a switch the phone makes is `switchedAway`.
+// when the user picks a source; a phone starting to play is `remotePlaybackStarted`.
 function pausesLocalPlayback(chosen, current) {
   var target = String(chosen || "").trim().toLowerCase()
   if (!target) return false
   return target !== String(current || "").trim().toLowerCase()
 }
 
-// Whether playback just moved from this machine to another peer: the reported
-// source was `local` and is now some other device. A switch between two other
-// peers, or toward this machine, is not one. Used on state lines, so a switch
-// the phone makes (Android's auto-switch) pauses the desktop the same way
-// picking the phone in the panel does.
-function switchedAway(before, after, local) {
-  var here = String(local || "").trim().toLowerCase()
-  if (!here) return false
-  // While a codec switch or a connection-quality change renegotiates the
-  // audio link, the headset names another peer as the source for a moment;
-  // that is not playback leaving (ADR 0012).
-  if (after && after.audio_settling) return false
+// Whether another peer just started playing through the headset: on this line
+// a remote device owns the source and reports itself playing, and on the last
+// one it did not (another source, or not playing). Used on state lines, so a
+// phone that takes the headset to play (Android's auto-switch) pauses the
+// desktop the same way picking the phone in the panel does.
+//
+// The source moving away is not enough on its own. Whenever this machine is
+// not streaming, a WH-1000XM6 names whichever other peer it last heard as the
+// source, playing or not, and it does so on every renegotiation: a codec
+// switch, a connection-quality change (`audio_settling`, ADR 0012), and the
+// microphone profile a push-to-talk opens (`voice_link`). Pausing on those
+// stopped the desktop's own media mid-dictation (ADR 0010).
+function remotePlaybackStarted(before, after, local) {
+  if (!after || after.audio_settling || after.voice_link) return false
+  if (!remoteSource(after, local) || after.source_playing !== true) return false
+  if (!before || !remoteSource(before, local) || before.source_playing !== true) return true
   var was = String(playbackSource(before) || "").trim().toLowerCase()
   var now = String(playbackSource(after) || "").trim().toLowerCase()
-  return was === here && now !== "" && now !== here
+  return was !== now
 }
 
 // A peer that takes the headset and reports a pause within this was a blip —

@@ -176,9 +176,14 @@ audio, read from the trailing status byte of the device list
 pauses every local MPRIS player that can pause
 (`Model.pausesLocalPlayback`, `Service.choosePlaybackSource`). With
 `pauseOnSwitch`, a switch the headset makes on its own does too: each state
-line is compared with the last, and a source that moves off this machine
-(`Model.switchedAway`, against `state["local_address"]` from
-`adapter_address`) pauses local playback in `Service.followSource`.
+line is compared with the last, and another peer starting to play — it owns
+the source and reports itself playing (`Model.remotePlaybackStarted`, against
+`state["local_address"]` from `adapter_address`) — pauses local playback in
+`Service.followSource`. A source that only moves is not enough: the headset
+names an idle peer whenever this machine stops streaming and while the
+microphone profile is up (`state["voice_link"]`, `is_voice_profile`), and
+nothing is paused, resumed or sent while `voice_link` or `audio_settling` is
+set.
 That pause is provisional: the headset also reports the source's own play
 status (`PLAY_NTFY_STATUS`, `0xA5`, decoded into `state["source_playing"]`), and
 a source that reports a pause within `Model.BLIP_WINDOW_MS` (6 s,
@@ -193,7 +198,7 @@ enable, pause), which the headset forwards over AVRCP to the current playback
 source. A local MPRIS player that starts while another peer owns playback
 (`Service.localPlaybackStarted`, `Model.remoteSource`) sends `pause-source`;
 `Daemon.pause_source` uses only a held link and re-checks the source at send
-time, sending nothing when it is already this machine. See
+time, sending nothing when it is already this machine or not playing. See
 [ADR 0010](../adr/0010-multipoint-playback-coordination.md).
 
 **DSEE Extreme** — Sony's upscaling of compressed audio. On v1 it is read and
@@ -217,7 +222,7 @@ chosen through PipeWire rather than the headphones (`PipeWireAudio`,
 connection-quality change has the audio link renegotiating. The headset names
 another multipoint peer as the source then, for under a second after a codec
 switch and for the whole 6–8 s gap after a connection-quality change, so
-`Model.switchedAway` ignores those lines. See
+`Model.remotePlaybackStarted` ignores those lines. See
 [ADR 0012](../adr/0012-codec-choice-through-pipewire.md).
 
 **Touch-panel confirmation** — switching a v2 touch panel off is refused unless

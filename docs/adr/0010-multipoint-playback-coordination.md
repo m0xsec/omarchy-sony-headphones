@@ -30,8 +30,10 @@ WH-1000XM6 (firmware 3.1.5).
 A `pauseOnSwitch` setting, on by default, keeps one peer playing:
 
 - **Away from this machine.** Each state line is compared with the last; when
-  the source moves from this machine to another peer (`Model.switchedAway`),
-  every local MPRIS player that can pause is paused (`Service.applyLine`). The
+  another peer starts playing through the headset — it owns the source and
+  reports itself playing (`Model.remotePlaybackStarted`) — every local MPRIS
+  player that can pause is paused (`Service.applyLine`). Until 2026-11-23 the
+  source merely moving away was enough; see *Amended* below. The
   daemon stamps its own adapter address on every state line
   (`adapter_address`, `local_address`), because the device list names this
   machine like any other peer. The pause is provisional, because a phone
@@ -52,7 +54,31 @@ A `pauseOnSwitch` setting, on by default, keeps one peer playing:
   headset, so the phone is still the source when the pause arrives.
   `Daemon.pause_source` re-checks the source at send time and sends nothing if
   it is already this machine, since a pause then would stop the desktop that
-  just started.
+  just started. It also sends nothing unless that peer reports itself playing.
+
+### Amended (2026-11-23): act on the peer playing, not on the source moving
+
+A WH-1000XM6 names whichever other peer it last heard as the playback source
+whenever this machine is not streaming, playing or not, and it does so on
+every renegotiation of the audio link. A push-to-talk dictation tool
+(Voxtype) recording from the headset makes WirePlumber open the microphone
+profile (`headset-head-unit`); A2DP goes down, the headset reports the phone
+as the source (`source_playing` false throughout), and the old rule paused the
+desktop's YouTube video mid-dictation. Pressing play then sent `pause-source`
+at a phone that was not playing; the headset had switched here within 0.1 s,
+so the pause was forwarded to this machine and stopped the video again, and
+the bursts of pause and play left its audio and video glitching.
+
+So both directions now act on the peer *playing*: the local pause waits for
+the remote source to report playing (`remotePlaybackStarted`), and
+`pause-source` is sent only to a source that reports playing, re-checked by the
+daemon at send time. The daemon also publishes `voice_link`, true while
+PipeWire has the headset in its microphone profile, read from the card on
+every source change so the line that reports the move already carries it;
+nothing is paused, resumed or sent while it is up, or while `audio_settling`
+is (ADR 0012). The blip undo is unchanged. A real auto-switch still pauses
+the desktop promptly, since the headset announces the new source's play
+status within a second of it starting.
 
 `pause-source` uses only a session the daemon already holds. It never
 reclaims one: if the phone's app took the session, it keeps it

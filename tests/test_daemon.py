@@ -1054,8 +1054,9 @@ class TestPauseSource(DemoDaemonMixin, unittest.TestCase):
     PHONE = "AA:BB:CC:DD:EE:FF"
     HERE = "11:22:33:44:55:66"
 
-    def source(self, address):
+    def source(self, address, playing=True):
         self.daemon.link.state["playback_source"] = address
+        self.daemon.link.state["source_playing"] = playing
 
     def pause(self, local=HERE):
         with mock.patch.object(sonyhp, "adapter_address", return_value=local):
@@ -1071,6 +1072,23 @@ class TestPauseSource(DemoDaemonMixin, unittest.TestCase):
         self.assertTrue(response["ok"])
         self.assertFalse(response["skipped"])
         self.assertEqual(self.sent(), [bytes([0xA4, 0x01, 0x00, 0x01])])
+
+    def test_a_remote_source_that_is_not_playing_is_left_alone(self):
+        # The headset names the last peer it heard as the source whether or not
+        # it plays. Pausing it then landed on this machine instead, once the
+        # headset switched here (WH-1000XM6, 2026-11-23).
+        self.connect()
+        for playing in (False, None):
+            self.source(self.PHONE, playing)
+            self.assertTrue(self.pause()["skipped"])
+        self.assertEqual(self.sent(), [])
+
+    def test_nothing_is_paused_while_the_microphone_profile_is_up(self):
+        self.connect()
+        self.source(self.PHONE)
+        self.daemon.link.state["voice_link"] = True
+        self.assertTrue(self.pause()["skipped"])
+        self.assertEqual(self.sent(), [])
 
     def test_this_machine_as_source_is_never_paused(self):
         self.connect()

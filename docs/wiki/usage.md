@@ -240,10 +240,14 @@ device starts playing — and if the other one keeps playing, the headset is
 pulled straight back. `pauseOnSwitch` (on by default) keeps one device playing
 at a time:
 
-- **The headset switches to another device.** The headset announces the new
-  playback source; when it moves from this computer to another peer, every
-  local MPRIS player that can pause is paused at once, so the two do not trade
-  the headset. The pause is provisional: a phone also reports "playing" for a
+- **Another device starts playing.** The headset announces the playback
+  source and whether it is playing; when another peer takes the headset and
+  reports itself playing, every local MPRIS player that can pause is paused
+  at once, so the two do not trade the headset. The source merely moving is
+  not enough: the headset names an idle phone as the source whenever this
+  computer stops streaming, and while something records from the headset's
+  microphone (a push-to-talk dictation tool, a call), so neither pauses
+  anything. The pause is provisional: a phone also reports "playing" for a
   muted autoplay clip, such as a video feed on unlock, so if the phone reports
   a pause within 6 seconds the players that were paused resume and the headset
   is switched back here. Only one such undo happens per 30 seconds — a phone
@@ -254,7 +258,8 @@ at a time:
   sends `pause-source` at once: the daemon asks the headset to pause the
   current source, and the headset forwards the pause to the phone over AVRCP.
   The daemon re-checks the source at send time and sends nothing if it is
-  already this computer, so the desktop is never paused by its own start.
+  already this computer, or if it is not playing, so the desktop is never
+  paused by its own start.
 
 Both directions need the control session held: a released session gets no
 source updates, and `pause-source` never reclaims one the phone's app took.
