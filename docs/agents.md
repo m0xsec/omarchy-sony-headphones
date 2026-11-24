@@ -239,8 +239,8 @@ Notes the table cannot carry:
   offered when the device names a slot for it. The WH-1000XM5 names slot
   `0xd1` (capture, gabamnml PR #3) and the WH-1000XM6 slot `0xd3` (capture,
   firmware 3.1.5). Switching it off enables fixed-message alerts first and
-  answers the headphones' confirmation; the XM5 then reconnects to apply it.
-  The XM6's off switch is not yet written on hardware.
+  answers the headphones' confirmation; the XM5 then reconnects to apply it,
+  and the XM6 applies it at once (verified on hardware, 2026-11-23).
 - **Touch sensor on the XM4** reads `.` on purpose: the hardware answers
   "still on" to every disable, so the set omits `touch-sensor` rather than
   drawing a dead row.
@@ -538,6 +538,10 @@ value at reply index 3.
 | Feature | GET | RET | SET | NOTIFY | Table |
 |---|---|---|---|---|---|
 | INIT | `0x00` | `0x01` | — | — | 1 |
+| Support lists | `0x06` | `0x07` | — | — | 1 **and** 2 |
+| General-settings slot names | `0xD0` | `0xD1` | — | — | 1 |
+| General settings (touch panel) | `0xD6` | `0xD7` | `0xD8` | `0xD9` | 1 |
+| Alerts (touch-panel confirmation) | — | — | `0x94` status, `0x98` answer | `0x99` | 1 |
 | Audio codec | `0x12` | `0x13` | — | `0x15` | 1 |
 | Audio family (DSEE / connection quality / cinema / BGM) | `0xE6` | `0xE7` | `0xE8` | `0xE9` | 1 |
 | Battery | `0x22` | `0x23` | — | `0x25` | 1 |
@@ -552,7 +556,8 @@ value at reply index 3.
 v2 subtypes (`payload[1]` names the feature inside a reused family):
 
 - **Audio `0xE6`–`0xE9`:** `0x01` DSEE Extreme (not inverted, `0x01` = on),
-  `0x02` connection quality (inverted), `0x04` Upmix Cinema (inverted), `0x09`
+  `0x02` connection quality on the WH-1000XM6 and `0x00` on a device listing
+  support function `0xE1` (WH-1000XM5), both inverted, `0x04` Upmix Cinema (inverted), `0x09`
   Background Music (inverted, carries a room byte), `0x03` the alternate BGM
   subtype some firmware answers. BGM and Cinema are two independent flags; the
   app's listening mode is derived from them with BGM first.
@@ -562,14 +567,26 @@ v2 subtypes (`payload[1]` names the feature inside a reused family):
   resume timeout.
 - **Peripheral `0x36`/`0x37`/`0x39`/`0x3C`:** `0x02` device list, `0x01` source
   switch.
-- **Ambient-sound dialect:** the device is asked which subtype it speaks;
-  writes echo the answered subtype. `V2_ASC_PROBE_ORDER` is `0x19` (noise
-  adaptation), `0x17` (legacy), `0x15` (wind), `0x22` (ambient-only); a device
-  that supports `0x19` still answers `0x17` out of a dormant slot, so the first
-  that answers wins.
-- **Equalizer subtype:** asked, defaulting to `0x04` (XM6); `0x00` is the
-  XM5-style dialect. The parser accepts `0x00`, `0x02` and `0x04`, and picks
-  the band offset (10 for six-band replies, 6 for ten-band).
+- **Ambient-sound dialect:** support function `0x6D` means `0x19` (XM6) and
+  `0x6B` means `0x17` (XM5); otherwise the device is asked, in
+  `V2_ASC_PROBE_ORDER`: `0x19` (noise adaptation), `0x17` (legacy), `0x15`
+  (wind), `0x22` (ambient-only). A device that supports `0x19` still answers
+  `0x17` out of a dormant slot, so the first that answers wins. Writes echo
+  the answered subtype.
+- **Equalizer:** support function `0x56`/`0x57` means subtype `0x04` (XM6) and
+  `0x50` means `0x00` (XM5); otherwise asked, `0x04` first. The *dialect* comes
+  from the reply's band count, not the subtype (an XM6 answers ten bands under
+  `0x00` too): six values are clear bass + five, biased by 10, with v1's preset
+  codes; ten are biased by 6, with the v2 preset table.
+- **General settings `0xD0`–`0xD9`:** slots `0xD1`–`0xD4`, each named by
+  `d0 <slot> 00` → `d1 <slot> <type> 01 <len> <name> <len> <summary>`. On the
+  XM6 (fw 3.1.5): `0xD1` `SIDETONE_SETTING`, `0xD2` `MULTIPOINT_SETTING`,
+  `0xD3` `TOUCH_PANEL_SETTING`; on the XM5 the touch panel is `0xD1`. Value:
+  `d8 <slot> 00 <0x00 on / 0x01 off>`, inverted.
+- **Alerts:** a touch-panel *off* write is refused until `94 00 00` enables
+  fixed-message alerts; the headset then sends `99 00 <alert> 01` and acts on
+  `98 00 <alert> 01`. The XM6 raises `0x0A` and applies at once (hardware,
+  2026-11-23); the XM5 raises `0x0B` and reconnects to apply.
 
 ### v2 values that are inverted on the wire
 
@@ -584,10 +601,46 @@ feature", and flip on the way in and out:
 | `listening-mode` Background Music | `0x00` = on |
 | `listening-mode` Upmix Cinema | `0x00` = on |
 | `voice-notifications` | `0x00` = on |
+| `touch-sensor` (v2 general-settings slot) | `0x00` = on |
 
 DSEE Extreme on v2 is the exception: not inverted, `0x01` = on. On v1, DSEE
 (`0xE8` subtype `0x02`) and voice guidance (`0x48 01 01 VV`) are non-inverted
 too, which is why the generations never share a boolean builder.
+
+### v2 notifications seen but not decoded
+
+A WH-1000XM6 (firmware 3.1.5) sends these unprompted on table 1 unless noted.
+They were read from a live trace on 2026-11-23; the parser ignores them today.
+They are recorded here so a feature built on one starts from the bytes.
+
+| Frame | Seen when | Reading |
+|---|---|---|
+| `c9 01 <len><str> <len><str> <len><str>` | Every touch gesture, button press, wear change and multipoint hand-off | An event log: three length-prefixed ASCII strings, one of them set. `key*` names the gesture, `op*` the action the headset took, `unit*` wear, `mp*` multipoint. |
+| `a9 20 <level>` | Volume changes, from the touch panel or the source | Volume level (seen 4–8) |
+| `a9 01 …` | A track starts or changes on the playing source | Now-playing metadata relayed from the source: length-prefixed title and artist strings |
+| `f5 10 01 <01/00>` | Taking the headset off / putting it on | Wear state: `01` removed, `00` worn |
+| `55 04 01 01 02` / `55 04 00 00` | Listening mode moved to Background music or Cinema / back to Standard | Equalizer availability, apparently: unavailable while either effect is on |
+| `e5 <sub> …` | Around listening-mode and touch-panel changes, and on connect | Unknown; subtypes `01`, `04` and `09` seen |
+| table 2 `3d 01 00 <MAC>` | Choosing a playback source | The new playback source's address |
+| table 2 `25 02 01` | After a source change or reconnect | Unknown |
+
+The `c9` strings seen so far:
+
+| Gesture or event (`key*` / `unit*`) | Action (`op*`) |
+|---|---|
+| `keyRDoubleTap` | `opPause` / `opPlay` |
+| `keyRRightFlick` | `opNext` |
+| `keyRUpFlick` / `keyRDownFlick` | `opVolUp` / `opVolDown` |
+| `keyRHold` (touch and hold) | `opGoogle`: the assistant gesture, handed to the assistant on the phone it is set up for |
+| `keyCustomBtn` | `opNC` / `opASM`: the NC/ambient button stepping the mode |
+| `keyCustomBtnHold` | none seen |
+| `unitRemove` / `unitWear` | none; wear detection, paired with the `f5 10` frame |
+| — | `mpChgA2dp`: multipoint moved the A2DP stream |
+
+So the helper *can* see touch-and-hold even though nothing on the desktop acts
+on it: holding the panel produces `keyRHold` and `opGoogle` on the control
+channel. Binding it to a desktop action would mean decoding `c9` into an event
+and having the daemon run something on it; nothing does that yet.
 
 ## Helper symbol map: `bin/sony-headphones`
 

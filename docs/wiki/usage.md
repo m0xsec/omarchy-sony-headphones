@@ -131,9 +131,18 @@ model that does not honour one does not get the row.
 | Multipoint | List connected devices and switch which one plays; v2 only (verified on the WH-1000XM6) |
 | Speak-to-Chat | On/off, sensitivity, resume timeout, voice focus where the model offers it |
 | Pause when taken off, voice guidance | Voice guidance on v1 everywhere, on v2 only the WH-1000XM5/XM6 |
-| Touch controls | On models that allow it — not the WH-1000XM4. On v2 the row appears when the headphones name a touch-panel setting (WH-1000XM5, WH-1000XM6); switching it off asks the headphones' confirmation, which the helper gives, and a WH-1000XM5 reconnects to apply it |
+| Touch controls | On models that allow it — not the WH-1000XM4. On v2 the row appears when the headphones name a touch-panel setting (WH-1000XM5, WH-1000XM6); switching it off asks the headphones' confirmation, which the helper gives. A WH-1000XM6 applies it at once (verified on hardware); a WH-1000XM5 reconnects to apply it |
 | Automatic power off | Never or when taken off; timers on models that honour them |
 | Battery, firmware, codec | Read-only |
+
+The touch panel's gestures — double tap to play or pause, flicks for next,
+previous and volume — are the headphones' own and work whatever this plugin
+does. **Touch and hold** is the assistant gesture: it calls up Google Assistant
+(or the assistant set in Sound Connect) on the phone it is set up for, and does
+nothing on this computer. The helper does see it: a hold arrives on the
+control channel as a `keyRHold` / `opGoogle` event (see the
+[agents reference](../agents.md#v2-notifications-seen-but-not-decoded)), so it
+could be bound to a desktop action in future, but nothing acts on it yet.
 
 Background music is unavailable while a digital assistant is set: Sound Connect
 greys the setting out with "check Voice control / Voice assistant", and writing

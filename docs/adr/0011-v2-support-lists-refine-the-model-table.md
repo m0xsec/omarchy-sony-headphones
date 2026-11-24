@@ -58,5 +58,6 @@ re-sending the change.
   probes the lists settle; on a WH-1000XM6 it measured under two seconds.
 - Adding a code to `V2_FN_FEATURES` needs a capture from every model that
   carries the feature, or it can hide a working control.
-- The XM6's touch panel is now offered on the strength of its slot name; its
-  off switch has not yet been written on hardware.
+- The XM6's touch panel is offered on the strength of its slot name. Its off
+  switch was verified on hardware on 2026-11-23: the XM6 raises the
+  non-reconnect alert (`0x0a`) and applies the change at once.
