@@ -124,14 +124,14 @@ model that does not honour one does not get the row.
 |---|---|
 | Noise cancelling / Ambient sound / Wind noise reduction / Off | Wind noise reduction appears only on models that report it |
 | Ambient level | 0–20, with Focus on Voice |
-| Equalizer | Eight tone presets plus Off and Manual; custom bands via the CLI, which also accepts the v1-only `custom-1` and `custom-2` preset codes. A v2 device has its own table — Off, Heavy, Clear, Hard, Soft and Custom — with a ten-band custom curve via the CLI |
+| Equalizer | Eight tone presets plus Off and Manual; custom bands via the CLI, which also accepts the v1-only `custom-1` and `custom-2` preset codes. A WH-1000XM6 has its own table — Off, Heavy, Clear, Hard, Soft and Custom — with a ten-band custom curve via the CLI; a WH-1000XM5 keeps the classic presets and the six-value curve |
 | DSEE Extreme | Upscaling of compressed audio |
 | Connection quality | Prioritize sound quality (LDAC) or a stable connection (SBC); v2 only |
 | Listening mode | Standard, Background music or Cinema — Background music also picks the room it simulates (My Room, Living Room, Cafe); v2 only |
 | Multipoint | List connected devices and switch which one plays; v2 only (verified on the WH-1000XM6) |
 | Speak-to-Chat | On/off, sensitivity, resume timeout, voice focus where the model offers it |
 | Pause when taken off, voice guidance | Voice guidance on v1 everywhere, on v2 only the WH-1000XM5/XM6 |
-| Touch controls | On models that allow it — not the WH-1000XM4 |
+| Touch controls | On models that allow it — not the WH-1000XM4. On v2 the row appears when the headphones name a touch-panel setting (WH-1000XM5, WH-1000XM6); switching it off asks the headphones' confirmation, which the helper gives, and a WH-1000XM5 reconnects to apply it |
 | Automatic power off | Never or when taken off; timers on models that honour them |
 | Battery, firmware, codec | Read-only |
 

@@ -86,7 +86,8 @@ nothing is worse than one that is not offered.
 | Model | Status |
 |---|---|
 | WH-1000XM6 | Verified on hardware: battery, noise cancelling, ambient sound (level and voice focus), the equalizer, DSEE Extreme, Bluetooth connection quality, listening mode (Standard, Background music and Cinema), multipoint (listing paired devices and switching which one plays), Speak-to-Chat, pause-when-taken-off and auto power off, with the active codec and firmware read out |
-| WH-1000XM5, WF-1000XM5, LinkBuds | Same v2 command set; battery, noise cancelling and ambient sound should work — reports welcome |
+| WH-1000XM5 | Captured on hardware, firmware 2.5.1 ([gabamnml/omarchy-sony-headphones#3](https://github.com/gabamnml/omarchy-sony-headphones/pull/3)): the classic equalizer, connection quality, touch controls and voice guidance follow those captures and run against an XM5 stand-in (`SONY_HEADPHONES_DEMO=xm5`) — reports welcome |
+| WF-1000XM5, LinkBuds | Same v2 command set; battery, noise cancelling and ambient sound should work — reports welcome |
 | WH-CH720N | Noise cancelling and ambient sound captured on hardware; the remaining rows are reported — reports welcome |
 
 The per-model capability matrix — which of the known models accepts which
@@ -97,13 +98,13 @@ setting, and on what evidence — is in the [wiki](docs/wiki/index.md).
 | Setting | Notes |
 |---|---|
 | Noise cancelling / Ambient sound / Wind noise reduction / Off | Ambient level 0–20, with Focus on Voice |
-| Equalizer | Eight v1 tone presets plus Off and Manual; the v2 preset codes confirmed on the WH-1000XM6, with a ten-band custom curve via the CLI |
+| Equalizer | Eight tone presets plus Off and Manual, on v1 and the WH-1000XM5; the WH-1000XM6's own preset codes, with a ten-band custom curve via the CLI |
 | DSEE Extreme | Upscaling of compressed audio |
 | Connection quality | Prioritize sound quality (LDAC) or a stable connection (SBC); v2 only |
 | Listening mode | Standard, Background music or Cinema; v2 only |
 | Multipoint | List connected devices and switch which one plays; v2 only, verified on the WH-1000XM6 |
 | Speak-to-Chat | On/off, sensitivity, resume timeout, voice focus where the model offers it |
-| Touch controls, auto power off, pause when taken off, voice guidance | Where the model honours them — no touch panel on the WH-1000XM4, and voice guidance on v2 only the WH-1000XM5/XM6 |
+| Touch controls, auto power off, pause when taken off, voice guidance | Where the model honours them — no touch panel on the WH-1000XM4, touch controls on v2 wherever the headphones name the setting, and voice guidance on v2 only the WH-1000XM5/XM6 |
 | Battery, firmware, codec | Read-only |
 
 Background music is unavailable while a digital assistant is set: Sound Connect
@@ -334,6 +335,7 @@ suite:
 ```bash
 SONY_HEADPHONES_DEMO=1  bin/sony-headphones status   # a WH-1000XM4 stand-in
 SONY_HEADPHONES_DEMO=v2 bin/sony-headphones status   # a WH-1000XM6 stand-in
+SONY_HEADPHONES_DEMO=xm5 bin/sony-headphones status  # a WH-1000XM5 stand-in, from its captures
 SONY_HEADPHONES_DEMO=1  bin/sony-headphones watch    # the widget attaches to this
 ```
 
