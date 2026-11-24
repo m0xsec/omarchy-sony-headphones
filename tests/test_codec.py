@@ -312,6 +312,63 @@ class TestSettle(unittest.TestCase):
         self.assertFalse(link.state["audio_settling"])
 
 
+class LateAudio:
+    """An audio link that is not up when the control link connects."""
+
+    def __init__(self):
+        self.up = False
+
+    def read(self):
+        if not self.up:
+            return {"codecs": [], "a2dp_codec": None}
+        return {"codecs": ["LDAC", "AAC"], "a2dp_codec": "LDAC"}
+
+
+class TestAudioPoll(unittest.TestCase):
+    def daemon(self):
+        clock = FakeClock()
+        daemon = sonyhp.Daemon(clock=clock)
+        link = sonyhp.DemoLinkV2()
+        link.audio = LateAudio()
+        link.refresh()
+        daemon.link = link
+        return daemon, clock, link
+
+    def test_an_audio_link_that_comes_up_later_is_noticed(self):
+        # A control link that connected while the A2DP link was down kept an
+        # empty list, and a hidden codec row, until the codec next changed.
+        daemon, clock, link = self.daemon()
+        self.assertEqual(link.state["codecs"], [])
+        link.audio.up = True
+        with mock.patch.object(daemon, "publish") as publish:
+            daemon.poll_audio()
+        self.assertEqual(link.state["codecs"], ["LDAC", "AAC"])
+        publish.assert_called_once_with()
+
+    def test_the_poll_is_paced_and_quiet_when_nothing_moved(self):
+        daemon, clock, link = self.daemon()
+        with mock.patch.object(daemon, "publish") as publish:
+            daemon.poll_audio()
+            link.audio.up = True
+            daemon.poll_audio()
+            self.assertEqual(link.state["codecs"], [])
+            clock.now += daemon.AUDIO_POLL_INTERVAL
+            daemon.poll_audio()
+        self.assertEqual(link.state["codecs"], ["LDAC", "AAC"])
+        publish.assert_called_once_with()
+
+    def test_a_settling_link_is_left_to_the_change_in_flight(self):
+        daemon, clock, link = self.daemon()
+        link.audio.up = True
+        link.state["audio_settling"] = True
+        daemon.poll_audio()
+        self.assertEqual(link.state["codecs"], [])
+
+    def test_no_link_no_poll(self):
+        daemon = sonyhp.Daemon()
+        daemon.poll_audio()
+
+
 class TestDaemonAndCli(unittest.TestCase):
     def test_the_precheck_refuses_a_codec_pipewire_did_not_offer(self):
         daemon = sonyhp.Daemon()

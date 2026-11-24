@@ -4607,6 +4607,13 @@ class Daemon:
     """
 
     POLL_INTERVAL = 60.0
+    # How often PipeWire is asked what it offers. The headset does not always
+    # announce the audio link coming up: a control link that connects while
+    # the A2DP link is down (at power-on, or reconnected mid-renegotiation
+    # after a connection-quality change) would otherwise keep an empty codec
+    # list, and a hidden codec row, until the codec next changed. One
+    # `pactl list cards` costs milliseconds.
+    AUDIO_POLL_INTERVAL = 5.0
     REQUEST_TIMEOUT = 2.0
     RETRY_MIN = 2.0
     RETRY_MAX = 30.0
@@ -4631,6 +4638,7 @@ class Daemon:
         self.retry_delay = self.RETRY_MIN
         self.next_attempt = 0.0
         self.next_poll = 0.0
+        self.next_audio_poll = 0.0
         # When the current link opened, for the flapping check in lose_link: a
         # link that dies soon after connecting must not reset the retry delay.
         self.connected_since: float | None = None
@@ -4901,6 +4909,24 @@ class Daemon:
         else:
             if self.link is not None and self.link.last_rx == heard:
                 self.lose_link("the headphones stopped answering")
+
+    def poll_audio(self) -> None:
+        """Re-read what PipeWire offers for a held link, publishing a change.
+
+        No headphone traffic and no client activity: it reads the computer's
+        side only, so it neither feeds the idle timer nor counts as liveness.
+        Skipped while a change has the audio link settling, which reads it
+        itself.
+        """
+        if self.link is None or self.clock() < self.next_audio_poll:
+            return
+        self.next_audio_poll = self.clock() + self.AUDIO_POLL_INTERVAL
+        if self.link.state.get("audio_settling"):
+            return
+        before = (self.link.state.get("codecs"), self.link.state.get("a2dp_codec"))
+        self.link.read_audio()
+        if (self.link.state.get("codecs"), self.link.state.get("a2dp_codec")) != before:
+            self.publish()
 
     def pause_source(self) -> dict:
         """Pause the peer that owns playback, when it is not this machine.
@@ -5333,6 +5359,7 @@ class Daemon:
                             self.link_failed(exc)
 
                 self.poll_link()
+                self.poll_audio()
 
                 # The idle check rides the one-second tick; the poll and a
                 # subscriber above are link traffic and must not reset it.
