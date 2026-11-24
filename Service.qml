@@ -201,13 +201,13 @@ Item {
 
   function followSource(before, after) {
     var local = after.local_address
-    if (Model.switchedAway(before, after, local)) {
+    if (Model.remotePlaybackStarted(before, after, local)) {
       switchPaused = pauseLocalPlayers()
       if (switchPaused.length > 0 && Model.blipUndoAllowed(lastBlipUndo, Date.now()))
         blipWindow.restart()
       else
         switchPaused = []
-    } else if (blipWindow.running && Model.sourceStopped(before, after, local)) {
+    } else if (blipWindow.running && !after.voice_link && Model.sourceStopped(before, after, local)) {
       blipWindow.stop()
       lastBlipUndo = Date.now()
       var players = switchPaused
@@ -234,6 +234,10 @@ Item {
   function localPlaybackStarted() {
     if (!pauseOnSwitch || helperPath === "" || session !== "held") return
     if (!Model.remoteSource(state, state.local_address)) return
+    // Only a peer that is actually playing needs pausing. Otherwise the
+    // headset is about to switch here anyway, and a pause that lands after
+    // the switch is forwarded to this machine and stops what just started.
+    if (state.source_playing !== true || state.voice_link) return
     if (pauseSourceProcess.running) return
     pauseSourceProcess.command = argv(["--json", "pause-source"])
     pauseSourceProcess.running = true

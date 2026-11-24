@@ -45,7 +45,7 @@ multipoint) three things showed up that the port has to answer for:
   row, with PipeWire's reason, not a lost connection.
 - While a codec switch or a connection-quality change has the audio link
   renegotiating, the daemon publishes `audio_settling: true`.
-  `Model.switchedAway` ignores a source change in a line that carries it, and
+  `Model.remotePlaybackStarted` (then `Model.switchedAway`) ignores a source change in a line that carries it, and
   the codec and connection-quality rows grey out until it clears.
 - After a connection-quality change the daemon waits for PipeWire's codec list
   to change and read the same twice, up to 15 s, and asks the headphones for

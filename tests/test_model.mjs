@@ -19,7 +19,7 @@ const names = [
   "MAX_AMBIENT_LEVEL", "LOG_LEVELS", "rowsFor", "hasRow", "supports",
   "eqPresets", "autoPowerOffOptions", "nextLogging", "loggingLabel",
   "nextMode", "clampLevel", "deviceOptions", "playbackSource", "sessionLabel", "barIcon", "barLabel", "batteryLow",
-  "ICON_HEADPHONES", "ICON_OFF", "switchedAway", "remoteSource", "sourceStopped", "BLIP_WINDOW_MS", "BLIP_COOLDOWN_MS", "blipUndoAllowed",
+  "ICON_HEADPHONES", "ICON_OFF", "remotePlaybackStarted", "remoteSource", "sourceStopped", "BLIP_WINDOW_MS", "BLIP_COOLDOWN_MS", "blipUndoAllowed",
   "present", "hasState", "SESSION_IDLE_MIN", "SESSION_IDLE_MAX",
   "SESSION_IDLE_DEFAULT", "clampSessionIdle", "settingKeyForRow", "isPending",
   "refusedReason", "refusedSummary", "pausesLocalPlayback", "availabilityFor",
@@ -511,29 +511,32 @@ test("batteryLow flags 20% and under on a connected headset only", function() {
   assert.equal(Model.batteryLow(null), false)
 })
 
-test("switchedAway fires only when playback leaves this machine", function() {
-  var here = "88:D8:2E:78:A9:D2", phone = "74:F4:41:04:15:70", tv = "14:C1:4E:C1:D0:10"
-  var on = function(address) { return { playback_source: address } }
-  assert.equal(Model.switchedAway(on(here), on(phone), here), true)
-  assert.equal(Model.switchedAway(on(here.toLowerCase()), on(phone), here), true)
-  assert.equal(Model.switchedAway(on(phone), on(here), here), false)
-  assert.equal(Model.switchedAway(on(phone), on(tv), here), false)
-  assert.equal(Model.switchedAway(on(here), on(here), here), false)
-  // A gap in the report (no source yet, or a released session) is not a switch.
-  assert.equal(Model.switchedAway(on(here), on(null), here), false)
-  assert.equal(Model.switchedAway(null, on(phone), here), false)
-  // Without knowing our own address nothing can be told apart.
-  assert.equal(Model.switchedAway(on(here), on(phone), null), false)
-})
-
-test("switchedAway ignores the blip while the audio link settles", function() {
-  // A codec switch or a connection-quality change makes the headset name
-  // another peer as the source for a moment (a WH-1000XM6, 2026-11-23).
-  var here = "AA:AA:AA:AA:AA:01", phone = "AA:AA:AA:AA:AA:02"
-  assert.equal(Model.switchedAway({ playback_source: here },
-                                  { playback_source: phone, audio_settling: true }, here), false)
-  assert.equal(Model.switchedAway({ playback_source: here, audio_settling: true },
-                                  { playback_source: phone, audio_settling: false }, here), true)
+test("remotePlaybackStarted fires when another peer starts playing", function() {
+  var here = "AA:AA:AA:AA:AA:01", phone = "AA:AA:AA:AA:AA:02", tv = "AA:AA:AA:AA:AA:03"
+  var line = function(address, playing, extra) {
+    return Object.assign({ playback_source: address, source_playing: playing }, extra || {})
+  }
+  // A phone taking the headset to play: the source moves and it reports playing.
+  assert.equal(Model.remotePlaybackStarted(line(here, null), line(phone, true), here), true)
+  assert.equal(Model.remotePlaybackStarted(line(here.toLowerCase(), null), line(phone, true), here), true)
+  // The play status can arrive a line after the switch.
+  assert.equal(Model.remotePlaybackStarted(line(phone, false), line(phone, true), here), true)
+  // Another remote peer taking over while the first was playing.
+  assert.equal(Model.remotePlaybackStarted(line(tv, true), line(phone, true), here), true)
+  // Already playing: not a new start.
+  assert.equal(Model.remotePlaybackStarted(line(phone, true), line(phone, true), here), false)
+  // The source moving to an idle phone is not playback leaving: a WH-1000XM6
+  // names the last peer it heard whenever this machine is not streaming.
+  assert.equal(Model.remotePlaybackStarted(line(here, null), line(phone, false), here), false)
+  assert.equal(Model.remotePlaybackStarted(line(here, null), line(phone, null), here), false)
+  // Toward this machine, or nothing known, is not one.
+  assert.equal(Model.remotePlaybackStarted(line(phone, true), line(here, true), here), false)
+  assert.equal(Model.remotePlaybackStarted(line(here, null), line(null, true), here), false)
+  assert.equal(Model.remotePlaybackStarted(null, line(phone, true), here), true)
+  assert.equal(Model.remotePlaybackStarted(line(here, null), line(phone, true), null), false)
+  // A push-to-talk's microphone profile, and a codec or quality renegotiation.
+  assert.equal(Model.remotePlaybackStarted(line(here, null), line(phone, true, { voice_link: true }), here), false)
+  assert.equal(Model.remotePlaybackStarted(line(here, null), line(phone, true, { audio_settling: true }), here), false)
 })
 
 test("the codec row follows what PipeWire offers, for either protocol", function() {

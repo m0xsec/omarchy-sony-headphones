@@ -1277,6 +1277,11 @@ def initial_state() -> dict:
         # multipoint peer as the playback source then, and the widget must
         # not take that for a real switch (ADR 0012).
         "audio_settling": False,
+        # True while PipeWire has the headset in its microphone profile
+        # (headset-head-unit), opened by whatever is recording from it. The
+        # headset reports another peer as the source then; the widget must
+        # not take that for playback moving away (ADR 0010).
+        "voice_link": False,
         "listening_mode": None,
         # Multipoint peers and whichever one currently owns playback, both
         # filled from the PERIPHERAL device-list family on protocol v2.
@@ -2183,13 +2188,25 @@ def read_audio_codecs(card: dict | None) -> dict:
     which hides the control rather than offering one that cannot work.
     """
     if card is None:
-        return {"codecs": [], "a2dp_codec": None}
+        return {"codecs": [], "a2dp_codec": None, "voice_link": False}
     profiles = a2dp_profiles(card)
     active = card.get("active_profile")
     return {
         "codecs": sorted(profiles, key=codec_rank),
         "a2dp_codec": next((codec for codec, name in profiles.items() if name == active), None),
+        "voice_link": is_voice_profile(active),
     }
+
+
+def is_voice_profile(name) -> bool:
+    """Whether a card profile is the headset's microphone (HFP/HSP) mode.
+
+    WirePlumber switches to it whenever something records from the headset —
+    a push-to-talk, a call — and switches back after. While it is up the
+    headset names another multipoint peer as the playback source.
+    """
+    text = str(name or "")
+    return text.startswith("headset-head-unit") or text == "bap-duplex"
 
 
 class PipeWireAudio:
@@ -2927,6 +2944,7 @@ class Link:
                 if payload[2] == V2_ALERT_TOUCH_PANEL_OFF_RECONNECT:
                     self.expect_drop = True
         codec = self.state.get("codec")
+        source = self.state.get("playback_source")
         try:
             changed = self.adapter.apply(self.state, msg_type, payload)
         except Exception as exc:
@@ -2935,9 +2953,12 @@ class Link:
             LOG.error("parser error ignored: type=%s payload=%s: %s",
                       msg_type, payload.hex(), exc, exc_info=True)
             return
-        if changed and self.state.get("codec") != codec:
+        if changed and (self.state.get("codec") != codec
+                        or self.state.get("playback_source") != source):
             # A new codec means the audio link was renegotiated, and what
-            # PipeWire offers may have changed with it.
+            # PipeWire offers may have changed with it. A new playback source
+            # may be the microphone profile coming up, which the line that
+            # reports the source change has to carry (`voice_link`).
             self.read_audio()
         if changed:
             self.notify_change()
@@ -3975,7 +3996,10 @@ class DemoAudio:
     def read(self) -> dict:
         offered = sorted(self.device.a2dp_codecs(), key=codec_rank)
         active = self.device.a2dp_codec if self.device.a2dp_codec in offered else None
-        return {"codecs": offered, "a2dp_codec": active}
+        # A test sets `voice_link` on the stand-in to stand for WirePlumber
+        # opening the headset's microphone profile.
+        voice = bool(getattr(self.device, "voice_link", False))
+        return {"codecs": offered, "a2dp_codec": None if voice else active, "voice_link": voice}
 
     def switch(self, codec: str) -> None:
         offered = self.device.a2dp_codecs()
@@ -4923,9 +4947,10 @@ class Daemon:
         self.next_audio_poll = self.clock() + self.AUDIO_POLL_INTERVAL
         if self.link.state.get("audio_settling"):
             return
-        before = (self.link.state.get("codecs"), self.link.state.get("a2dp_codec"))
+        keys = ("codecs", "a2dp_codec", "voice_link")
+        before = tuple(self.link.state.get(key) for key in keys)
         self.link.read_audio()
-        if (self.link.state.get("codecs"), self.link.state.get("a2dp_codec")) != before:
+        if tuple(self.link.state.get(key) for key in keys) != before:
             self.publish()
 
     def pause_source(self) -> dict:
@@ -4947,6 +4972,12 @@ class Daemon:
         local = adapter_address() or ""
         if not source or source == local:
             LOG.info("pause-source skipped: %s", "no source" if not source else "this machine is the source")
+            return {"ok": True, "skipped": True, "state": self.state()}
+        # A peer that is not playing needs no pause, and the headset is about
+        # to switch here: a pause that lands after the switch is forwarded to
+        # this machine and stops what just started (2026-11-23, WH-1000XM6).
+        if link.state.get("source_playing") is not True or link.state.get("voice_link"):
+            LOG.info("pause-source skipped: the source is not playing")
             return {"ok": True, "skipped": True, "state": self.state()}
         try:
             link.request([v2_pause_source_request()], settle=0.1)

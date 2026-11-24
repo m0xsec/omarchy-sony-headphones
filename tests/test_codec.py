@@ -45,11 +45,13 @@ def xm6_card(active="a2dp-sink", stable=False):
 class TestProfiles(unittest.TestCase):
     def test_codecs_come_from_the_description_best_first(self):
         codecs = sonyhp.read_audio_codecs(xm6_card())
-        self.assertEqual(codecs, {"codecs": ["LDAC", "AAC", "SBC-XQ", "SBC"], "a2dp_codec": "LDAC"})
+        self.assertEqual(codecs, {"codecs": ["LDAC", "AAC", "SBC-XQ", "SBC"], "a2dp_codec": "LDAC",
+                                  "voice_link": False})
 
     def test_a_shifted_profile_name_is_read_by_its_codec(self):
         codecs = sonyhp.read_audio_codecs(xm6_card(stable=True))
-        self.assertEqual(codecs, {"codecs": ["AAC", "SBC-XQ", "SBC"], "a2dp_codec": "AAC"})
+        self.assertEqual(codecs, {"codecs": ["AAC", "SBC-XQ", "SBC"], "a2dp_codec": "AAC",
+                                  "voice_link": False})
 
     def test_headset_and_unavailable_profiles_are_left_out(self):
         card = xm6_card(active="headset-head-unit")
@@ -70,7 +72,16 @@ class TestProfiles(unittest.TestCase):
         self.assertEqual(len(sonyhp.read_audio_codecs(card)["codecs"]), sonyhp.MAX_CODECS)
 
     def test_no_card_offers_nothing(self):
-        self.assertEqual(sonyhp.read_audio_codecs(None), {"codecs": [], "a2dp_codec": None})
+        self.assertEqual(sonyhp.read_audio_codecs(None),
+                         {"codecs": [], "a2dp_codec": None, "voice_link": False})
+
+    def test_the_microphone_profile_is_a_voice_link(self):
+        # WirePlumber opens headset-head-unit for whatever records from the
+        # headset; both voice codecs and LE Audio's duplex profile count.
+        for active in ("headset-head-unit", "headset-head-unit-cvsd", "bap-duplex"):
+            self.assertIs(sonyhp.read_audio_codecs(xm6_card(active=active))["voice_link"], True, active)
+        for active in ("a2dp-sink", "a2dp-sink-aac", "off", None):
+            self.assertIs(sonyhp.read_audio_codecs(xm6_card(active=active))["voice_link"], False, active)
 
 
 class TestPactl(unittest.TestCase):
@@ -367,6 +378,35 @@ class TestAudioPoll(unittest.TestCase):
     def test_no_link_no_poll(self):
         daemon = sonyhp.Daemon()
         daemon.poll_audio()
+
+
+class TestVoiceLink(unittest.TestCase):
+    def test_a_source_change_carries_the_microphone_profile_in_the_same_line(self):
+        # The headset reports the source moving about 0.2 s after WirePlumber
+        # opens the microphone profile; the line that carries the move must
+        # already say why, or the widget pauses the desktop for it.
+        link = sonyhp.DemoLinkV2()
+        link.refresh()
+        seen = []
+        link.on_change = lambda state: seen.append((state["playback_source"], state["voice_link"]))
+        link.device.voice_link = True
+        link.device.playback_source = "AA:BB:CC:DD:EE:FF"
+        link.request([sonyhp.v2_device_list_get()])
+        self.assertIn(("AA:BB:CC:DD:EE:FF", True), seen)
+
+    def test_the_audio_poll_publishes_the_microphone_profile_closing(self):
+        clock = FakeClock()
+        daemon = sonyhp.Daemon(clock=clock)
+        link = sonyhp.DemoLinkV2()
+        link.device.voice_link = True
+        link.refresh()
+        daemon.link = link
+        self.assertTrue(link.state["voice_link"])
+        link.device.voice_link = False
+        with mock.patch.object(daemon, "publish") as publish:
+            daemon.poll_audio()
+        self.assertFalse(link.state["voice_link"])
+        publish.assert_called_once_with()
 
 
 class TestDaemonAndCli(unittest.TestCase):

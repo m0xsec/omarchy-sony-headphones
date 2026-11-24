@@ -779,7 +779,7 @@ lives in [adr/](adr/) and [wiki/architecture.md](wiki/architecture.md).
 | `connected_devices` | Connected Sony devices, briefly cached |
 | `find_device` | Pick the preferred or first connected device |
 | `headset_present` | Whether BlueZ still reports the headset connected, read fresh (the takeover check in `Daemon.link_failed`) |
-| `adapter_address` | This machine's Bluetooth address, read once; stamped as `local_address` so the widget can tell playback leaving this machine (`Model.switchedAway`) |
+| `adapter_address` | This machine's Bluetooth address, read once; stamped as `local_address` so the widget can tell another peer playing from this machine (`Model.remotePlaybackStarted`) |
 
 ### The audio codec (PipeWire)
 
@@ -790,7 +790,8 @@ lives in [adr/](adr/) and [wiki/architecture.md](wiki/architecture.md).
 | `bluez_card` | PipeWire's card for one headset address |
 | `a2dp_profiles` / `PROFILE_CODEC_RE` / `PROFILE_NAME_RE` / `MAX_CODECS` | codec → profile for the available A2DP profiles; codec from the description, plain profile names only, bounded |
 | `codec_rank` / `CODEC_ORDER` | Best-first order for the panel |
-| `read_audio_codecs` | A card to `{"codecs", "a2dp_codec"}`; empty without a card |
+| `read_audio_codecs` | A card to `{"codecs", "a2dp_codec", "voice_link"}`; empty without a card |
+| `is_voice_profile` | Whether a card profile is the headset's microphone mode (`headset-head-unit*`, `bap-duplex`), published as `voice_link` |
 | `PipeWireAudio` | `Link.audio` on a real link: `read`, `switch` (counts once the card reports it, `CODEC_SWITCH_TIMEOUT`), `reconnect` (cycles the A2DP sink, `AUDIO_SINK_UUID`) |
 
 ### Transport classes
