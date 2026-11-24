@@ -105,7 +105,8 @@ setting, and on what evidence — is in the [wiki](docs/wiki/index.md).
 | Multipoint | List connected devices and switch which one plays; v2 only, verified on the WH-1000XM6 |
 | Speak-to-Chat | On/off, sensitivity, resume timeout, voice focus where the model offers it |
 | Touch controls, auto power off, pause when taken off, voice guidance | Where the model honours them — no touch panel on the WH-1000XM4, touch controls on v2 wherever the headphones name the setting, and voice guidance on v2 only the WH-1000XM5/XM6 |
-| Battery, firmware, codec | Read-only |
+| Codec | Whatever PipeWire can switch these headphones to right now (LDAC, AAC, SBC-XQ, SBC on a WH-1000XM6), on any model with an audio link. A stable connection takes LDAC off the list |
+| Battery, firmware | Read-only |
 
 Background music is unavailable while a digital assistant is set: Sound Connect
 greys the setting out with "check Voice control / Voice assistant", and writing
@@ -188,6 +189,7 @@ bin/sony-headphones set eq bass-boost             # v1 preset; v2 has its own ta
 bin/sony-headphones set eq-bands "0,1,2,3,4,5,6,-1,-2,-3"  # v2: 10 bands, -6..6
 bin/sony-headphones set dsee toggle
 bin/sony-headphones set connection-quality sound-quality
+bin/sony-headphones set codec AAC               # any codec PipeWire offers right now
 bin/sony-headphones set listening-mode cinema
 bin/sony-headphones set playback-source AA:BB:CC:DD:EE:FF   # the multipoint peer to make active
 bin/sony-headphones set speak-to-chat on

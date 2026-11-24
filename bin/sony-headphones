@@ -1267,6 +1267,16 @@ def initial_state() -> dict:
         "touch_slot": None,
         "dsee": None,
         "connection_quality": None,
+        # The computer's side of the codec, from PipeWire: the A2DP codecs it
+        # can switch these headphones to right now, best first, and the one in
+        # use. Empty without an audio link or without PipeWire.
+        "codecs": [],
+        "a2dp_codec": None,
+        # True while a codec switch or a connection-quality change has the
+        # audio link renegotiating. The headset briefly reports another
+        # multipoint peer as the playback source then, and the widget must
+        # not take that for a real switch (ADR 0012).
+        "audio_settling": False,
         "listening_mode": None,
         # Multipoint peers and whichever one currently owns playback, both
         # filled from the PERIPHERAL device-list family on protocol v2.
@@ -2071,6 +2081,159 @@ def headset_present(address: str) -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# The audio codec, via PipeWire
+# ---------------------------------------------------------------------------
+#
+# The headphones report the codec but do not choose it: the computer does,
+# and on Omarchy that means PipeWire, which offers one A2DP profile per codec
+# the pair can use. Choosing a codec is choosing the card's profile. What is
+# on offer moves with the headphones' connection quality — a WH-1000XM6 set to
+# a stable connection stops offering LDAC, and its plain `a2dp-sink` profile
+# then means AAC — so the list is read fresh each time and codecs are matched
+# by the name in the profile's description, never by the profile's name.
+# Ported from Vitor Pacheco's work in gabamnml/omarchy-sony-headphones#3.
+
+# pactl is found and run the way bluetoothctl is (ADR 0002). It needs the
+# runtime directory to reach PipeWire's socket, and only once it is verified
+# private; nothing else crosses from the environment.
+PACTL_CANDIDATES = ("/usr/bin/pactl", "/bin/pactl", "/usr/local/bin/pactl")
+PACTL_ENV = {"PATH": "/usr/bin:/bin", "LC_ALL": "C"}
+
+
+def find_pactl() -> str | None:
+    for candidate in PACTL_CANDIDATES:
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
+PACTL = find_pactl()
+
+# `... (A2DP Sink, codec LDAC)`: the codec is the last parenthesised field.
+PROFILE_CODEC_RE = re.compile(r"\bcodec ([A-Za-z0-9][A-Za-z0-9 ._+-]{0,23})\)$")
+# A profile name goes back to pactl as an argument, so only plain names do.
+PROFILE_NAME_RE = re.compile(r"^a2dp-sink[A-Za-z0-9_.-]{0,32}$")
+# Best first, which is how the panel lists them; anything else follows.
+CODEC_ORDER = ("LDAC", "aptX HD", "aptX", "AAC", "LC3", "SBC-XQ", "SBC")
+MAX_CODECS = 16
+CODEC_SWITCH_TIMEOUT = 4.0
+# The A2DP sink profile, which reconnect_audio cycles to make PipeWire re-read
+# what the headphones offer.
+AUDIO_SINK_UUID = "0000110b-0000-1000-8000-00805f9b34fb"
+
+
+def pactl(*args: str, timeout: float = 3.0) -> str | None:
+    """pactl's output, or None if it is missing, failed, or took too long."""
+    if PACTL is None:
+        return None
+    env = dict(PACTL_ENV)
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    if runtime and is_private_dir(runtime):
+        env["XDG_RUNTIME_DIR"] = runtime
+    try:
+        done = subprocess.run(
+            [PACTL, *args],
+            check=False, capture_output=True, text=True, timeout=timeout, env=env,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return done.stdout if done.returncode == 0 else None
+
+
+def bluez_card(address: str) -> dict | None:
+    """PipeWire's card for these headphones, as pactl describes it."""
+    try:
+        cards = json.loads(pactl("--format=json", "list", "cards") or "[]")
+    except ValueError:
+        return None
+    for card in cards if isinstance(cards, list) else []:
+        if not isinstance(card, dict) or not str(card.get("name", "")).startswith("bluez_card."):
+            continue
+        properties = card.get("properties")
+        if isinstance(properties, dict) \
+                and str(properties.get("api.bluez5.address", "")).lower() == address.lower():
+            return card
+    return None
+
+
+def a2dp_profiles(card: dict) -> dict[str, str]:
+    """codec -> profile, for the playback profiles the card can switch to now."""
+    found: dict[str, str] = {}
+    profiles = card.get("profiles")
+    for name, profile in (profiles.items() if isinstance(profiles, dict) else ()):
+        if not PROFILE_NAME_RE.match(str(name)) or not isinstance(profile, dict):
+            continue
+        if profile.get("available") is False:
+            continue
+        match = PROFILE_CODEC_RE.search(str(profile.get("description", "")))
+        if match and len(found) < MAX_CODECS:
+            found.setdefault(match.group(1), str(name))
+    return found
+
+
+def codec_rank(codec: str) -> int:
+    return CODEC_ORDER.index(codec) if codec in CODEC_ORDER else len(CODEC_ORDER)
+
+
+def read_audio_codecs(card: dict | None) -> dict:
+    """The codecs a card offers, best first, and the one in use.
+
+    Empty when there is no card — not connected for audio, or no PipeWire —
+    which hides the control rather than offering one that cannot work.
+    """
+    if card is None:
+        return {"codecs": [], "a2dp_codec": None}
+    profiles = a2dp_profiles(card)
+    active = card.get("active_profile")
+    return {
+        "codecs": sorted(profiles, key=codec_rank),
+        "a2dp_codec": next((codec for codec, name in profiles.items() if name == active), None),
+    }
+
+
+class PipeWireAudio:
+    """The computer's side of the audio link: PipeWire's card for one headset.
+
+    A seam like Transport: Link reads and switches codecs only through this,
+    so the demo stands a fake in and nothing else knows pactl exists.
+    """
+
+    def __init__(self, address: str, clock=time.monotonic, sleep=time.sleep):
+        self.address = address
+        self.clock = clock
+        self.sleep = sleep
+
+    def read(self) -> dict:
+        return read_audio_codecs(bluez_card(self.address))
+
+    def switch(self, codec: str) -> None:
+        """Move the card to `codec`'s profile, or raise ValueError saying why not.
+
+        pactl returns before the switch happens, and one that fails shows only
+        in PipeWire's log — usually another Bluetooth device already streaming
+        with that codec — so the switch counts once the card reports it.
+        """
+        card = bluez_card(self.address)
+        profiles = a2dp_profiles(card) if card else {}
+        if codec not in profiles:
+            offered = ", ".join(sorted(profiles, key=codec_rank)) or "none"
+            raise ValueError(f"{codec} is not on offer right now (offered: {offered})")
+        if pactl("set-card-profile", str(card["name"]), profiles[codec]) is None:
+            raise ValueError(f"PipeWire refused to switch to {codec}")
+        deadline = self.clock() + CODEC_SWITCH_TIMEOUT
+        while self.clock() < deadline:
+            self.sleep(0.25)
+            if self.read()["a2dp_codec"] == codec:
+                return
+        raise ValueError(f"PipeWire could not switch to {codec}; another Bluetooth device may be using it")
+
+    def reconnect(self) -> None:
+        """Take the A2DP profile down and up again, leaving the control link be."""
+        bluetoothctl("disconnect", self.address, AUDIO_SINK_UUID, timeout=10.0)
+        bluetoothctl("connect", self.address, AUDIO_SINK_UUID, timeout=15.0)
+
+
 def _channel_cache_path(address: str) -> str:
     return os.path.join(CACHE_DIR, _normalize_mac(address) + ".channel")
 
@@ -2493,7 +2656,8 @@ class Link:
     # needs no settle wait: apply_setting drains once and is done.
     answers_immediately = False
 
-    def __init__(self, address: str, on_change=None, transport: Transport | None = None):
+    def __init__(self, address: str, on_change=None, transport: Transport | None = None,
+                 audio=None):
         self.address = address
         self.on_change = on_change
         self.state = initial_state()
@@ -2507,6 +2671,9 @@ class Link:
         # Where the bytes come from. A real link gets the RFCOMM transport
         # wired back to this link; the demo passes its stand-in transport in.
         self.transport = transport if transport is not None else RfcommTransport(self)
+        # The computer's side of the audio link, for the codec: PipeWire on a
+        # real link, a stand-in on the demo (see PipeWireAudio).
+        self.audio = audio if audio is not None else PipeWireAudio(address)
         self.seq = 0
         self._buffer = bytearray()
         self.last_rx = 0.0
@@ -2759,6 +2926,7 @@ class Link:
                 self._outbox.append(answer)
                 if payload[2] == V2_ALERT_TOUCH_PANEL_OFF_RECONNECT:
                     self.expect_drop = True
+        codec = self.state.get("codec")
         try:
             changed = self.adapter.apply(self.state, msg_type, payload)
         except Exception as exc:
@@ -2767,8 +2935,23 @@ class Link:
             LOG.error("parser error ignored: type=%s payload=%s: %s",
                       msg_type, payload.hex(), exc, exc_info=True)
             return
+        if changed and self.state.get("codec") != codec:
+            # A new codec means the audio link was renegotiated, and what
+            # PipeWire offers may have changed with it.
+            self.read_audio()
         if changed:
             self.notify_change()
+
+    def read_audio(self) -> None:
+        """Fold what PipeWire offers for these headphones into the state.
+
+        A failure to read leaves the last answer alone: the codec row is a
+        convenience, and a pactl hiccup must never cost the control link.
+        """
+        try:
+            self.state.update(self.audio.read())
+        except Exception as exc:
+            LOG.error("reading the audio codecs failed: %s", exc)
 
     def notify_change(self) -> None:
         """Fan out a state change made outside dispatch.
@@ -2810,6 +2993,7 @@ class Link:
 
     def refresh(self) -> dict:
         self.request(self.adapter.refresh_requests(self.state), settle=0.6)
+        self.read_audio()
         return self.state
 
     def _select_subtype(self, candidates: tuple[int, ...], getter,
@@ -2963,6 +3147,10 @@ class Protocol:
         """Ask the headphones to turn off, on the command sets that offer it."""
         raise NotImplementedError
 
+    def codec_requests(self, state: dict) -> list[tuple[int, bytes]]:
+        """Ask the headphones which codec the audio link is using."""
+        raise NotImplementedError
+
 
 class V1Protocol(Protocol):
     """The v1 ("MDR") command set: WH-1000XM2/XM3/XM4, WF-SP800N…"""
@@ -2985,6 +3173,9 @@ class V1Protocol(Protocol):
 
     def power_off(self, link: Link) -> None:
         link.write(MSG_COMMAND_1, bytes([POWER_OFF, 0x00]))
+
+    def codec_requests(self, state: dict) -> list[tuple[int, bytes]]:
+        return [req(bytes([CODEC_GET, 0x00]))]
 
 
 class V2Protocol(Protocol):
@@ -3028,6 +3219,9 @@ class V2Protocol(Protocol):
     def power_off(self, link: Link) -> None:
         raise ValueError("turning the headphones off is not supported over v2")
 
+    def codec_requests(self, state: dict) -> list[tuple[int, bytes]]:
+        return [v2_audio_codec_get()]
+
 
 # ---------------------------------------------------------------------------
 # Settings
@@ -3046,6 +3240,10 @@ SETTING_KEYS = sorted(list(BOOL_SETTINGS) + [
     "stc-sensitivity", "stc-timeout", "stc-focus-on-voice", "voice-notifications",
     "connection-quality", "listening-mode", "bgm-room-size", "playback-source",
 ])
+
+# Keys the CLI and the socket accept that are this computer's, not the
+# headphones': no protocol builder sees them (apply_setting routes them).
+HOST_SETTING_KEYS = ["codec"]
 
 
 def parse_bool(value, current=None) -> bool:
@@ -3393,7 +3591,122 @@ class Reconnecting(NotConnected):
     """
 
 
+# A new connection quality can take the audio link down for seven seconds or
+# more (a WH-1000XM6 drops its A2DP card at once and brings it back with a
+# different codec list), and reconnecting it ourselves costs a few more.
+QUALITY_SETTLE_TIMEOUT = 15.0
+QUALITY_RENEGOTIATION_GRACE = 3.0
+# How long the headset's playback-source blip after a codec switch is waited
+# out: a WH-1000XM6 named another multipoint peer for 0.3-0.5 s.
+CODEC_SETTLE_WINDOW = 1.0
+
+
+def _set_settling(link: Link, settling: bool) -> None:
+    if link.state.get("audio_settling") != settling:
+        link.state["audio_settling"] = settling
+        link.notify_change()
+
+
+def check_codec(state: dict, value) -> str:
+    """The codec asked for, if PipeWire offers it; ValueError otherwise."""
+    codec = str(value)
+    offered = state.get("codecs") or []
+    if codec not in offered:
+        raise ValueError(
+            f"{codec} is not on offer for these headphones right now "
+            f"(offered: {', '.join(offered) or 'none'})")
+    return codec
+
+
+def apply_codec(link: Link, value) -> dict:
+    """Switch the computer's codec for these headphones through PipeWire.
+
+    Not a headphone setting at all, so no protocol builder is involved and
+    both generations get it. A switch PipeWire does not carry out is a
+    refusal on the row, with PipeWire's reason, not a lost connection.
+    """
+    link.read_audio()
+    codec = check_codec(link.state, value)
+    _mark_pending(link, "codec")
+    _set_settling(link, True)
+    try:
+        try:
+            link.audio.switch(codec)
+        except ValueError as exc:
+            link.read_audio()
+            _settle_pending(link, "codec", str(exc))
+            return link.state
+        # Let the headset's source blip arrive while settling is still set,
+        # then ask for the codec: the headphones do not always announce one
+        # PipeWire moved them to.
+        link.pump(0 if link.answers_immediately else CODEC_SETTLE_WINDOW)
+        link.request(link.adapter.codec_requests(link.state))
+        link.read_audio()
+        _settle_pending(link, "codec")
+    except Exception:
+        _settle_pending(link, "codec")
+        raise
+    finally:
+        _set_settling(link, False)
+    return link.state
+
+
+def settle_connection_quality(link: Link, codecs_before: list) -> None:
+    """See a new connection quality through to the codecs PipeWire offers.
+
+    The headphones change what they offer at once, but PipeWire learns it only
+    when the audio link is set up again. A WH-1000XM6 does that itself in both
+    directions; a WH-1000XM5 sometimes did not when moving back to sound
+    quality, leaving LDAC missing until something reconnected. So wait for
+    the list to change and settle, and reconnect the audio profile ourselves
+    only if nothing has moved after a grace period.
+
+    The control link is not ours to keep through this: on a multipoint setup
+    the phone's Sound Connect app can take the session once the headset comes
+    back. A link that goes then is left for the daemon's ordinary read path to
+    classify, rather than raised from a write that has already landed.
+    """
+    clock = time.monotonic
+    started = clock()
+    reconnected = False
+    previous = None
+    if not codecs_before:
+        # Without audio to begin with, there is nothing to see through.
+        link.read_audio()
+        return
+    try:
+        while True:
+            link.read_audio()
+            codecs = link.state.get("codecs")
+            # Changed, and the same on two reads running: PipeWire fills the
+            # list in one profile at a time as the link comes back.
+            if codecs and codecs != codecs_before and (codecs == previous or link.answers_immediately):
+                break
+            previous = codecs
+            elapsed = clock() - started
+            if link.answers_immediately or elapsed >= QUALITY_SETTLE_TIMEOUT:
+                break
+            if not reconnected and codecs == codecs_before and elapsed >= QUALITY_RENEGOTIATION_GRACE:
+                LOG.info("audio link did not renegotiate; reconnecting the A2DP profile")
+                link.audio.reconnect()
+                reconnected = True
+                continue
+            link.pump(0.5)
+        # Ask the headphones what they now use, since an announcement may have
+        # been missed; they call it unsettled until the link is back up, so
+        # ask until they name one.
+        for _ in range(4):
+            link.request(link.adapter.codec_requests(link.state))
+            if link.state.get("codec") not in (None, "unknown") or link.answers_immediately:
+                break
+            link.pump(1.0)
+    except (NotConnected, OSError) as exc:
+        LOG.info("control link went while the audio link settled: %s", exc)
+
+
 def apply_setting(link: Link, key: str, value) -> dict:
+    if key == "codec":
+        return apply_codec(link, value)
     requests = link.adapter.setting_requests(link.state, key, value)
     # The request list is built (and may refuse the key) before anything is
     # marked: a setting the builder rejects never claims to be in flight.
@@ -3406,6 +3719,12 @@ def apply_setting(link: Link, key: str, value) -> dict:
         msg_type == MSG_COMMAND_1 and payload[:1] == bytes([V2_ALERT_SET_STATUS])
         for msg_type, payload in requests)
     link.expect_drop = False
+    # A new connection quality renegotiates the audio link, and the headset
+    # briefly names another peer as the source while it does.
+    renegotiates = key == "connection-quality"
+    codecs_before = list(link.state.get("codecs") or [])
+    if renegotiates:
+        _set_settling(link, True)
     before = dict(link.state)
     try:
         for msg_type, payload in requests:
@@ -3441,6 +3760,8 @@ def apply_setting(link: Link, key: str, value) -> dict:
         if key in BGM_WRITE_KEYS:
             link.interrupted_key = key
         _settle_pending(link, key)
+        if renegotiates:
+            _set_settling(link, False)
         # A link the headphones said they would drop, dropped: the change is
         # being applied, so say that instead of reporting a lost connection.
         if link.expect_drop and isinstance(exc, (NotConnected, OSError)) \
@@ -3450,6 +3771,12 @@ def apply_setting(link: Link, key: str, value) -> dict:
     finally:
         link.confirm_alerts = False
         link._outbox.clear()
+    if renegotiates:
+        try:
+            if link.state.get("connection_quality") != before.get("connection_quality"):
+                settle_connection_quality(link, codecs_before)
+        finally:
+            _set_settling(link, False)
     return link.state
 
 
@@ -3529,6 +3856,12 @@ class DemoDevice:
         # a headset does when it discards a write it ACKs. Off by default, so
         # the ordinary demo and the verify tool still round-trip faithfully.
         self.stubborn = False
+        # The computer's side of the audio link, which DemoAudio answers for.
+        self.a2dp_codec = "LDAC"
+
+    def a2dp_codecs(self) -> list[str]:
+        """The codecs PipeWire would offer for this stand-in."""
+        return ["LDAC", "AAC", "SBC"]
 
     def asc(self) -> bytes:
         # The level byte only carries meaning in ambient sound; noise cancelling
@@ -3561,7 +3894,7 @@ class DemoDevice:
             version = b"2.5.0"
             return [req(bytes([FW_VERSION_REPLY, 0x02, len(version)]) + version)]
         if code == CODEC_GET:
-            return [req(bytes([CODEC_RET, 0x00, 0x10]))]
+            return [req(bytes([CODEC_RET, 0x00, demo_codec_byte(self.a2dp_codec)]))]
         if code == BATTERY_GET:
             return [req(bytes([BATTERY_RET, BATTERY_SINGLE, self.battery, 0x01 if self.charging else 0x00]))]
         if code == NC_OPTIMIZER_STATE_GET:
@@ -3617,6 +3950,45 @@ class DemoDevice:
         return []
 
 
+def demo_codec_byte(codec: str) -> int:
+    """The codec byte a headset reports for what PipeWire chose.
+
+    SBC-XQ is SBC at a higher bitpool, and a WH-1000XM6 reports it as SBC.
+    """
+    return {"LDAC": 0x10, "AAC": 0x02, "aptX": 0x20, "aptX HD": 0x21}.get(codec, 0x01)
+
+
+class DemoAudio:
+    """PipeWire's side of the demo: the codecs a stand-in offers, and switching.
+
+    Same interface as PipeWireAudio, answered from the stand-in device so a
+    connection-quality change moves the list the way the hardware does.
+    `busy` names codecs another device is holding, which PipeWire then fails
+    to switch to, as it does for real.
+    """
+
+    def __init__(self, device):
+        self.device = device
+        self.busy: set = set()
+        self.reconnects = 0
+
+    def read(self) -> dict:
+        offered = sorted(self.device.a2dp_codecs(), key=codec_rank)
+        active = self.device.a2dp_codec if self.device.a2dp_codec in offered else None
+        return {"codecs": offered, "a2dp_codec": active}
+
+    def switch(self, codec: str) -> None:
+        offered = self.device.a2dp_codecs()
+        if codec not in offered:
+            raise ValueError(f"{codec} is not on offer right now (offered: {', '.join(offered)})")
+        if codec in self.busy:
+            raise ValueError(f"PipeWire could not switch to {codec}; another Bluetooth device may be using it")
+        self.device.a2dp_codec = codec
+
+    def reconnect(self) -> None:
+        self.reconnects += 1
+
+
 class DemoLink(Link):
     """A Link whose other end is a DemoDevice instead of a radio.
 
@@ -3635,7 +4007,7 @@ class DemoLink(Link):
         # never see a write survive a release/reclaim.
         self.device = device if device is not None else DemoDevice()
         super().__init__("00:00:00:00:00:00", on_change=on_change,
-                         transport=DemoTransport(self.device))
+                         transport=DemoTransport(self.device), audio=DemoAudio(self.device))
         self._set_protocol("v1")
         self.state["name"] = "WH-1000XM4 (demo)"
         self.state["features"] = features_for("WH-1000XM4", "v1")
@@ -3722,6 +4094,23 @@ class DemoDeviceV2:
         # Off for a stand-in that predates the support lists, so the probing
         # fallback stays exercised.
         self.lists_support = True
+        self.a2dp_codec = "LDAC"
+
+    def a2dp_codecs(self) -> list[str]:
+        """What PipeWire offers, as a WH-1000XM6 showed it (2026-11-23).
+
+        A stable connection takes LDAC off the table; the headset then
+        renegotiates the audio link itself and comes back on the best codec
+        left, and on LDAC again when sound quality returns.
+        """
+        if self.connection_quality == V2_CONNECTION_QUALITY_STABLE:
+            return ["AAC", "SBC-XQ", "SBC"]
+        return ["LDAC", "AAC", "SBC-XQ", "SBC"]
+
+    def set_connection_quality(self, value: int) -> None:
+        if value != self.connection_quality:
+            self.connection_quality = value
+            self.a2dp_codec = self.a2dp_codecs()[0]
 
     def device_list(self) -> bytes:
         """The multipoint list, shaped the way parse_v2_device_list reads it.
@@ -3778,7 +4167,7 @@ class DemoDeviceV2:
             if code == V2_AUDIO_SET and not self.stubborn \
                     and len(payload) >= 3 \
                     and payload[2] in (V2_CONNECTION_QUALITY_SOUND, V2_CONNECTION_QUALITY_STABLE):
-                self.connection_quality = payload[2]
+                self.set_connection_quality(payload[2])
             return [req(bytes([V2_AUDIO_RET, sub, self.connection_quality]))]
 
         if sub == V2_AUDIO_SUB_UPMIX_CINEMA:
@@ -3914,7 +4303,7 @@ class DemoDeviceV2:
                                0x01 if self.charging else 0x00]))]
 
         if code == V2_AUDIO_CODEC_GET:
-            return [req(bytes([V2_AUDIO_CODEC_RET, 0x02, 0x10]))]
+            return [req(bytes([V2_AUDIO_CODEC_RET, 0x02, demo_codec_byte(self.a2dp_codec)]))]
 
         if code == FW_VERSION_REQUEST:
             version = b"3.0.0"
@@ -4036,7 +4425,7 @@ class DemoDeviceXM5(DemoDeviceV2):
                 if sub == V2_AUDIO_SUB_CONNECTION_MODE:
                     if code == V2_AUDIO_SET and not self.stubborn and len(payload) >= 3 \
                             and payload[2] in (V2_CONNECTION_QUALITY_SOUND, V2_CONNECTION_QUALITY_STABLE):
-                        self.connection_quality = payload[2]
+                        self.set_connection_quality(payload[2])
                     reply = V2_AUDIO_RET if code == V2_AUDIO_GET else V2_AUDIO_NOTIFY
                     return [req(bytes([reply, sub, self.connection_quality]))]
                 if sub != V2_AUDIO_SUB_DSEE:
@@ -4074,6 +4463,7 @@ class DemoLinkV2(DemoLink):
         model = next((name for name, cls in DEMO_V2_MODELS.items()
                       if type(self.device) is cls), model)
         self.transport = DemoTransport(self.device)
+        self.audio = DemoAudio(self.device)
         self._set_protocol("v2")
         self.state["name"] = f"{model} (demo)"
         self.state["features"] = features_for(model, "v2")
@@ -4639,6 +5029,17 @@ class Daemon:
         known = self._known_state()
         if known is None or not known.get("protocol"):
             return None
+        if str(request.get("cmd", "")) == "set" and request.get("key") == "codec":
+            # PipeWire's, not the headphones': checked against what it offered
+            # last. An empty list is not a refusal here, since it may only be
+            # stale; apply_codec reads it fresh and refuses for real.
+            if not known.get("codecs"):
+                return None
+            try:
+                check_codec(known, request.get("value"))
+            except ValueError as exc:
+                return str(exc)
+            return None
         builder = setting_requests_v2 if known.get("protocol") == "v2" else setting_requests
         if str(request.get("cmd", "")) == "cycle":
             key, value = "nc", "cycle"
@@ -5092,8 +5493,17 @@ def direct(request: dict, preferred: str | None) -> dict:
         link.close()
 
 
+# A change that renegotiates the audio link is seen through before the daemon
+# answers (settle_connection_quality, apply_codec), which can take fifteen
+# seconds. Giving up sooner would fall back to dialling the headphones while
+# the daemon still holds them.
+SLOW_SETTINGS = frozenset({"connection-quality", "codec"})
+SLOW_REQUEST_TIMEOUT = 30.0
+
+
 def run_request(request: dict, preferred: str | None) -> dict:
-    response = ask_daemon(request)
+    slow = str(request.get("cmd", "")) == "set" and str(request.get("key", "")) in SLOW_SETTINGS
+    response = ask_daemon(request, timeout=SLOW_REQUEST_TIMEOUT if slow else 10.0)
     if response is None:
         response = direct(request, preferred)
     return response
@@ -5119,6 +5529,10 @@ def describe(state: dict) -> str:
         add("Battery", f"{battery}%" + (" (charging)" if state.get("charging") else ""))
     add("Firmware", state.get("firmware"))
     add("Codec", state.get("codec"))
+    if state.get("codecs"):
+        # PipeWire's side: what this computer can switch to, the active one marked.
+        add("Codecs offered", " ".join(
+            f"[{codec}]" if codec == state.get("a2dp_codec") else codec for codec in state["codecs"]))
     add("Mode", state.get("nc_mode"))
     if state.get("nc_mode") in ("ambient-sound", "off"):
         add("Ambient level", f"{state.get('ambient_level')}/{MAX_AMBIENT_LEVEL}")
@@ -5377,7 +5791,8 @@ def build_parser() -> argparse.ArgumentParser:
     logger.set_defaults(func=cmd_logging)
 
     setter = sub.add_parser("set", help="change one setting")
-    setter.add_argument("key", choices=SETTING_KEYS, metavar="KEY", help=", ".join(SETTING_KEYS))
+    setter.add_argument("key", choices=SETTING_KEYS + HOST_SETTING_KEYS, metavar="KEY",
+                        help=", ".join(SETTING_KEYS + HOST_SETTING_KEYS))
     setter.add_argument("value")
     setter.set_defaults(func=cmd_set)
 

@@ -66,7 +66,7 @@ One line each.
 | `README.md` | Owner-facing overview, install, gestures and settings tables. |
 | `Makefile` | The gate and dev helpers: `test`, `lint`, `qmltest`, `check`, `demo`, `verify`, `doctor`. |
 | `docs/agents.md` | This file. |
-| `docs/adr/` | The eleven architecture decisions: security, seams, sessions, framing, capabilities. |
+| `docs/adr/` | The twelve architecture decisions: security, seams, sessions, framing, capabilities, the codec. |
 | `docs/wiki/` | Reader-facing pages: the usage guide and the architecture write-up. |
 | `tests/` | The Python suite, the JS harness and the QML tests. |
 | `tools/verify.py` | On-hardware write-then-read-back verifier for what a device honours. |
@@ -182,6 +182,11 @@ The 18 `SETTING_KEYS` (the CLI's accepted keys, `bin/sony-headphones`):
 `pause-when-taken-off`, `playback-source`, `speak-to-chat`,
 `stc-focus-on-voice`, `stc-sensitivity`, `stc-timeout`, `touch-sensor`,
 `voice-notifications`.
+
+`codec` is accepted too, but it is a host setting (`HOST_SETTING_KEYS`): the
+daemon switches PipeWire's card profile for it and no protocol builder sees
+it, so it is offered on any model PipeWire has an audio link for, whatever the
+table below says (ADR 0012).
 
 Whether a key is offered is decided by `_setting_context` in each builder:
 
@@ -776,6 +781,18 @@ lives in [adr/](adr/) and [wiki/architecture.md](wiki/architecture.md).
 | `headset_present` | Whether BlueZ still reports the headset connected, read fresh (the takeover check in `Daemon.link_failed`) |
 | `adapter_address` | This machine's Bluetooth address, read once; stamped as `local_address` so the widget can tell playback leaving this machine (`Model.switchedAway`) |
 
+### The audio codec (PipeWire)
+
+| Symbol | Role |
+| --- | --- |
+| `find_pactl` / `PACTL` / `PACTL_CANDIDATES` / `PACTL_ENV` | Resolve `pactl` once; run it with `PATH`, `LC_ALL` and a verified-private `XDG_RUNTIME_DIR` only |
+| `pactl` | Run a `pactl` subcommand, return stdout or `None` |
+| `bluez_card` | PipeWire's card for one headset address |
+| `a2dp_profiles` / `PROFILE_CODEC_RE` / `PROFILE_NAME_RE` / `MAX_CODECS` | codec → profile for the available A2DP profiles; codec from the description, plain profile names only, bounded |
+| `codec_rank` / `CODEC_ORDER` | Best-first order for the panel |
+| `read_audio_codecs` | A card to `{"codecs", "a2dp_codec"}`; empty without a card |
+| `PipeWireAudio` | `Link.audio` on a real link: `read`, `switch` (counts once the card reports it, `CODEC_SWITCH_TIMEOUT`), `reconnect` (cycles the A2DP sink, `AUDIO_SINK_UUID`) |
+
 ### Transport classes
 
 | Symbol | Role |
@@ -812,6 +829,7 @@ lives in [adr/](adr/) and [wiki/architecture.md](wiki/architecture.md).
 | `Link.notify_change` | Fan a state change made outside dispatch out to the owner via `on_change` |
 | `Link.request` / `Link.refresh` | Send a request list and settle |
 | `Link._select_subtype` / `select_asc_subtype` / `select_eq_subtype` / `select_bgm_subtype` | v2 dialect probes, narrowed to one candidate when the support list decides |
+| `Link.audio` / `Link.read_audio` | The audio seam (PipeWire or the demo's) and folding its answer into `codecs` / `a2dp_codec`; read on refresh and whenever the headset's codec changes |
 | `Link.read_support` | v2 discovery: support lists, slot names, battery and connection subtypes |
 | `Link.confirm_alerts` / `Link.expect_drop` / `Link._flush` | Answer the touch-panel confirmation only while asked for; send it after dispatch; remember a drop the device announced |
 | `Link.poll_requests` / `Link.power_off` | Periodic liveness ask; power off via the adapter |
@@ -830,6 +848,12 @@ lives in [adr/](adr/) and [wiki/architecture.md](wiki/architecture.md).
 | `_setting_context` | Shared gate: exclusivity, features, ambient and v2 discovery fields |
 | `setting_requests` | v1: key + value to requests |
 | `setting_requests_v2` | v2: key + value to requests (incl. the inverted 3-byte `voice-notifications` shape) |
+| `HOST_SETTING_KEYS` | Keys that are this computer's, not the headphones' (`codec`): accepted by the CLI, never seen by a protocol builder |
+| `check_codec` / `apply_codec` | Validate against what PipeWire offers; switch with `audio_settling` set, refusing on the row with PipeWire's reason |
+| `settle_connection_quality` / `QUALITY_SETTLE_TIMEOUT` / `QUALITY_RENEGOTIATION_GRACE` | Wait for PipeWire's list to change after a connection-quality change; reconnect A2DP once if it does not; a link lost meanwhile is left to the daemon |
+| `_set_settling` / `CODEC_SETTLE_WINDOW` | Publish `audio_settling`; how long a codec switch's source blip is waited out |
+| `SLOW_SETTINGS` / `SLOW_REQUEST_TIMEOUT` | Settings the CLI waits 30 s for |
+| `Protocol.codec_requests` | Ask the headphones which codec the link uses, per generation |
 | `Reconnecting` | A `NotConnected` the device announced: the change is applied by a reconnect, so the daemon reports success and does not retry |
 | `apply_setting` | Mark the key pending (clearing a prior refusal), write then pump until the read-back moves or `SETTLE_TIMEOUT`, recording a refusal on a no-move settle; a BGM key that raises is remembered in `Link.interrupted_key` |
 | `_mark_pending` / `_settle_pending` | Publish/clear the `pending` key and record a `refused` entry |
@@ -855,6 +879,7 @@ lives in [adr/](adr/) and [wiki/architecture.md](wiki/architecture.md).
 | `DemoDeviceV2` / `DemoLinkV2` | v2 stand-in device (WH-1000XM6, with its captured support lists and slot names) and link; the link negotiates like a real one |
 | `DemoDeviceXM5` / `DEMO_V2_MODELS` | WH-1000XM5 stand-in from the gabamnml PR #3 captures (`SONY_HEADPHONES_DEMO=xm5`); model name to stand-in class |
 | `_capability_reply` | A general-settings slot naming itself, for the stand-ins |
+| `DemoAudio` / `demo_codec_byte` | The demo's PipeWire: offered codecs from the stand-in (the XM6's drop LDAC on a stable connection), `busy` codecs that fail to switch; the codec byte a headset reports (SBC-XQ as SBC) |
 | `DemoDevice.stubborn` / `DemoDeviceV2.stubborn` | Opt-in flag (off by default) that acknowledges a write without changing the value |
 | `demo_mode` | Read `SONY_HEADPHONES_DEMO`; `v1`, `v2`, `xm5` or off |
 | `demo_link` | Build the stand-in Link for the selected demo |
