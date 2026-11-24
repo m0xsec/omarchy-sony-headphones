@@ -53,6 +53,12 @@ multipoint) three things showed up that the port has to answer for:
   reconnects the A2DP profile once, the XM5 case; an XM6 never reaches that.
   The CLI waits 30 s for these two settings rather than 10, since giving up
   would fall back to dialling the headphones the daemon still holds.
+- The daemon also re-reads PipeWire every 5 s on a held link
+  (`Daemon.poll_audio`). The headset does not always announce the audio link
+  coming up, so a control link that connected while A2DP was down — at
+  power-on, or reconnected mid-renegotiation after a connection-quality
+  change — otherwise kept an empty list and a hidden row until the codec next
+  changed. One `pactl list cards` costs milliseconds.
 - A control link lost while the audio link settles is not raised: the write
   already landed. The daemon's ordinary read path then classifies the reset,
   and a phone taking the session is stepped aside for as ADR 0008 says, which

@@ -910,6 +910,7 @@ lives in [adr/](adr/) and [wiki/architecture.md](wiki/architecture.md).
 | --- | --- |
 | `Daemon` | Holds the link open and lends it over a unix socket |
 | `Daemon.POLL_INTERVAL` / `RETRY_MIN` / `RETRY_MAX` / `STABLE_AFTER` / `REQUEST_TIMEOUT` / `MAX_SUBSCRIBERS` / `SUBSCRIBER_TIMEOUT` | Timing, retry-hysteresis (`STABLE_AFTER` 10 s) and subscriber bounds |
+| `Daemon.poll_audio` / `AUDIO_POLL_INTERVAL` | Re-read PipeWire's offer every 5 s on a held link and publish a change, so an audio link that comes up after the control link (power-on, or a reconnect mid-renegotiation) shows its codec row |
 | `Daemon.connected_since` | When the current link opened, for the `STABLE_AFTER` flapping check |
 | `Daemon.reset_refusal` | BGM-reset explanation carried across a link loss, cleared on the next attempt at that key |
 | `_env_session_policy` / `_env_session_idle` | Read the boot policy from the environment, with safe defaults |

@@ -41,6 +41,20 @@ To place it somewhere specific in the bar:
 omarchy bar move gabamnml.sony-headphones --section right --index 0
 ```
 
+## Update
+
+Pull the plugin directory (`git pull --ff-only` in
+`~/.config/omarchy/plugins/gabamnml.sony-headphones`, or however it was
+installed). The shell notices the files changed and reloads the plugin, which
+restarts the helper on the new code. That reload can keep the previous copy of
+`Model.js`, the panel's row logic, so a new row may not appear until the shell
+restarts — the codec row did exactly that. If the panel looks unchanged after
+an update, restart the shell:
+
+```bash
+omarchy-restart-shell
+```
+
 ## Uninstall
 
 ```bash
