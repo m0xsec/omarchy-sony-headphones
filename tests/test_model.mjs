@@ -580,7 +580,7 @@ test("holdTriggered fires once per new touch-and-hold", function() {
 })
 
 test("remoteSource is another peer owning playback", function() {
-  var here = "88:D8:2E:78:A9:D2", phone = "74:F4:41:04:15:70"
+  var here = "AA:AA:AA:AA:AA:01", phone = "AA:AA:AA:AA:AA:02"
   assert.equal(Model.remoteSource({ playback_source: phone }, here), true)
   assert.equal(Model.remoteSource({ playback_source: here.toLowerCase() }, here), false)
   assert.equal(Model.remoteSource({ playback_source: null }, here), false)
@@ -600,7 +600,7 @@ test("blipUndoAllowed undoes one blip per cooldown", function() {
 })
 
 test("sourceStopped fires once, when the remote source reports a pause", function() {
-  var here = "88:D8:2E:78:A9:D2", phone = "74:F4:41:04:15:70"
+  var here = "AA:AA:AA:AA:AA:01", phone = "AA:AA:AA:AA:AA:02"
   var playing = { playback_source: phone, source_playing: true }
   var paused = { playback_source: phone, source_playing: false }
   assert.equal(Model.sourceStopped(playing, paused, here), true)
@@ -609,7 +609,7 @@ test("sourceStopped fires once, when the remote source reports a pause", functio
   assert.equal(Model.sourceStopped({ playback_source: here, source_playing: true },
                                    { playback_source: here, source_playing: false }, here), false)
   // A pause that arrives with a switch to another peer is not this peer stopping.
-  assert.equal(Model.sourceStopped({ playback_source: "14:C1:4E:C1:D0:10", source_playing: true },
+  assert.equal(Model.sourceStopped({ playback_source: "AA:AA:AA:AA:AA:03", source_playing: true },
                                    paused, here), false)
 })
 

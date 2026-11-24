@@ -1135,8 +1135,8 @@ class TestAdapterAddress(unittest.TestCase):
         return first, second, ctl
 
     def test_reads_the_controller_line_once(self):
-        first, second, ctl = self.read("Controller 88:d8:2e:78:a9:d2 (public)\n\tName: enigma\n")
-        self.assertEqual(first, "88:D8:2E:78:A9:D2")
+        first, second, ctl = self.read("Controller aa:aa:aa:aa:aa:01 (public)\n\tName: desktop\n")
+        self.assertEqual(first, "AA:AA:AA:AA:AA:01")
         self.assertEqual(second, first)
         self.assertEqual(ctl.call_count, 1)
 
