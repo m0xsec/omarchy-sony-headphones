@@ -16,7 +16,10 @@ passes only `HOME`, `XDG_RUNTIME_DIR`, `XDG_CACHE_HOME` and
 `SONY_HEADPHONES_LOG` set from the widget's logging setting. Inside the helper,
 `bluetoothctl` is resolved once at import from an absolute candidate list
 (`/usr/bin`, `/bin`, `/usr/local/bin`) and run with
-`env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"}`.
+`env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"}`. `pactl`, which chooses the
+codec through PipeWire (ADR 0012), is resolved and run the same way, with one
+addition: the `XDG_RUNTIME_DIR` that holds PipeWire's socket, and only once
+`is_private_dir` has verified it.
 
 ## Consequences
 

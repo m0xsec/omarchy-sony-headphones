@@ -133,7 +133,8 @@ model that does not honour one does not get the row.
 | Pause when taken off, voice guidance | Voice guidance on v1 everywhere, on v2 only the WH-1000XM5/XM6 |
 | Touch controls | On models that allow it — not the WH-1000XM4. On v2 the row appears when the headphones name a touch-panel setting (WH-1000XM5, WH-1000XM6); switching it off asks the headphones' confirmation, which the helper gives. A WH-1000XM6 applies it at once (verified on hardware); a WH-1000XM5 reconnects to apply it |
 | Automatic power off | Never or when taken off; timers on models that honour them |
-| Battery, firmware, codec | Read-only |
+| Codec | Whatever PipeWire can switch these headphones to right now (LDAC, AAC, SBC-XQ, SBC on a WH-1000XM6), on any model with an audio link. A stable connection takes LDAC off the list |
+| Battery, firmware | Read-only |
 
 The touch panel's gestures — double tap to play or pause, flicks for next,
 previous and volume — are the headphones' own and work whatever this plugin
@@ -143,6 +144,20 @@ nothing on this computer. The helper does see it: a hold arrives on the
 control channel as a `keyRHold` / `opGoogle` event (see the
 [agents reference](../agents.md#v2-notifications-seen-but-not-decoded)), so it
 could be bound to a desktop action in future, but nothing acts on it yet.
+
+The codec is this computer's choice rather than the headphones', so the row
+comes from PipeWire, which offers one profile per codec the pair can use, and
+lists only what it offers right now. A switch counts once PipeWire reports
+it; the usual failure is another Bluetooth device already streaming with that
+codec, and the row says so. Switching drops the audio for a moment, and a
+connection-quality change for several seconds: the headphones renegotiate the
+link and come back with a different codec list. While they do, the codec and
+connection-quality rows are greyed, and `pauseOnSwitch` ignores the headset
+briefly naming a phone as the source. With Sony's Sound Connect app on a phone
+connected over multipoint, a connection-quality change also hands the control
+session to the phone a few seconds later; reclaim it from the panel.
+WirePlumber remembers the codec picked and restores it when the audio
+reconnects.
 
 Background music is unavailable while a digital assistant is set: Sound Connect
 greys the setting out with "check Voice control / Voice assistant", and writing
@@ -258,6 +273,7 @@ bin/sony-headphones set eq-bands "0,1,2,3,4,5,6,-1,-2,-3"  # v2: 10 bands, -6..6
 bin/sony-headphones set dsee toggle
 bin/sony-headphones set connection-quality sound-quality
 bin/sony-headphones set connection-quality stable
+bin/sony-headphones set codec AAC                 # any codec PipeWire offers; see `status`
 bin/sony-headphones set listening-mode cinema
 bin/sony-headphones set listening-mode background-music
 bin/sony-headphones set bgm-room-size cafe

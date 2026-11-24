@@ -23,7 +23,7 @@ const names = [
   "present", "hasState", "SESSION_IDLE_MIN", "SESSION_IDLE_MAX",
   "SESSION_IDLE_DEFAULT", "clampSessionIdle", "settingKeyForRow", "isPending",
   "refusedReason", "refusedSummary", "pausesLocalPlayback", "availabilityFor",
-  "eqBlockedByCodec"
+  "eqBlockedByCodec", "codecOptions"
 ]
 const Model = new Function(source + `\nreturn { ${names.join(", ")} }`)()
 
@@ -524,6 +524,36 @@ test("switchedAway fires only when playback leaves this machine", function() {
   assert.equal(Model.switchedAway(null, on(phone), here), false)
   // Without knowing our own address nothing can be told apart.
   assert.equal(Model.switchedAway(on(here), on(phone), null), false)
+})
+
+test("switchedAway ignores the blip while the audio link settles", function() {
+  // A codec switch or a connection-quality change makes the headset name
+  // another peer as the source for a moment (a WH-1000XM6, 2026-11-23).
+  var here = "AA:AA:AA:AA:AA:01", phone = "AA:AA:AA:AA:AA:02"
+  assert.equal(Model.switchedAway({ playback_source: here },
+                                  { playback_source: phone, audio_settling: true }, here), false)
+  assert.equal(Model.switchedAway({ playback_source: here, audio_settling: true },
+                                  { playback_source: phone, audio_settling: false }, here), true)
+})
+
+test("the codec row follows what PipeWire offers, for either protocol", function() {
+  var base = { connected: true, protocol: "v1", features: XM4_FEATURES }
+  assert.equal(Model.hasRow(Model.rowsFor(base), "codec"), false)
+  var offered = Object.assign({}, base, { codecs: ["LDAC", "AAC", "SBC"], a2dp_codec: "LDAC" })
+  assert.equal(Model.hasRow(Model.rowsFor(offered), "codec"), true)
+  var v2 = Object.assign({}, offered, { protocol: "v2", features: XM6_FEATURES })
+  var rows = Model.rowsFor(v2)
+  assert.equal(rows.indexOf("codec"), rows.indexOf("connection-quality") + 1)
+  assert.deepEqual(Model.codecOptions(offered).map(function(o) { return o.value }), ["LDAC", "AAC", "SBC"])
+  assert.deepEqual(Model.codecOptions(null), [])
+  assert.equal(Model.settingKeyForRow("codec"), "codec")
+})
+
+test("codec and connection quality grey out while the audio link settles", function() {
+  var settling = { connected: true, audio_settling: true }
+  assert.equal(Model.availabilityFor(settling, "codec").available, false)
+  assert.equal(Model.availabilityFor(settling, "connection-quality").available, false)
+  assert.equal(Model.availabilityFor({ connected: true }, "codec").available, true)
 })
 
 test("remoteSource is another peer owning playback", function() {

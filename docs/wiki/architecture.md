@@ -208,6 +208,18 @@ and out. It rides audio subtype `0x00` on a device that lists support function
 `0xe1` (WH-1000XM5) and `0x02` otherwise (WH-1000XM6); the XM6 answers both, so
 the parser reads only the chosen one (`v2_connection_subtype`).
 
+**Audio codec (host side)** — the A2DP codec this computer streams with,
+chosen through PipeWire rather than the headphones (`PipeWireAudio`,
+`apply_codec`, `state["codecs"]`, `state["a2dp_codec"]`). The headphones' own
+`codec` field reports what the link uses; a WH-1000XM6 reports SBC-XQ as SBC.
+
+**Audio settling** — `state["audio_settling"]`, true while a codec switch or a
+connection-quality change has the audio link renegotiating. The headset names
+another multipoint peer as the source then, for under a second after a codec
+switch and for the whole 6–8 s gap after a connection-quality change, so
+`Model.switchedAway` ignores those lines. See
+[ADR 0012](../adr/0012-codec-choice-through-pipewire.md).
+
 **Touch-panel confirmation** — switching a v2 touch panel off is refused unless
 fixed-message alerts are on (`94 00 00`); the headphones then ask
 (`99 00 0a|0b ..`) and act on the answer (`98 00 <alert> 01`). The helper
@@ -548,6 +560,13 @@ without a new ADR.
   withhold the controls it does not list; the touch panel is offered only where
   a slot names itself, and the one alert its off switch raises is the only one
   the helper ever answers.
+
+- **[0012 — Codec choice through PipeWire, and a settling audio
+  link](../adr/0012-codec-choice-through-pipewire.md).** The codec is chosen by
+  switching PipeWire's card profile through `pactl`, a host setting for either
+  protocol. While a switch or a connection-quality change renegotiates the
+  audio link the daemon publishes `audio_settling`, so the headset's brief
+  report of another source never pauses the desktop.
 
 ## Tests
 

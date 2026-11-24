@@ -142,6 +142,8 @@ Panel {
       sony.choose("bgm-room-size", "bgm_room_size", stepOption(Model.BGM_ROOM_SIZE, sony.state.bgm_room_size, direction))
     } else if (key === "connection-quality") {
       sony.choose("connection-quality", "connection_quality", stepOption(Model.CONNECTION_QUALITY, sony.state.connection_quality, direction))
+    } else if (key === "codec") {
+      sony.choose("codec", "a2dp_codec", stepOption(Model.codecOptions(sony.state), sony.state.a2dp_codec, direction))
     } else if (key === "stc-sensitivity") {
       sony.choose("stc-sensitivity", "stc_sensitivity", stepOption(Model.STC_SENSITIVITY, sony.state.stc_sensitivity, direction))
     } else if (key === "stc-timeout") {
@@ -509,14 +511,14 @@ Panel {
           }
 
           PanelSeparator {
-            visible: sony.showing && (root.supports("equalizer") || root.supports("listening-mode") || root.supports("dsee") || root.supports("connection-quality"))
+            visible: sony.showing && (root.supports("equalizer") || root.supports("listening-mode") || root.supports("dsee") || root.supports("connection-quality") || Model.hasRow(rows, "codec"))
             foreground: root.foreground
           }
 
           // -- sound ----------------------------------------------------
 
           Column {
-            visible: sony.showing && (root.supports("equalizer") || root.supports("listening-mode") || root.supports("dsee") || root.supports("connection-quality"))
+            visible: sony.showing && (root.supports("equalizer") || root.supports("listening-mode") || root.supports("dsee") || root.supports("connection-quality") || Model.hasRow(rows, "codec"))
             width: parent.width
             spacing: Style.space(8)
 
@@ -572,6 +574,16 @@ Panel {
               value: String(sony.state.connection_quality || "sound-quality")
               onPicked: function(value) { sony.choose("connection-quality", "connection_quality", value) }
               tip: "Bluetooth quality — trade bitrate for a stronger link, or the other way around"
+            }
+
+            DropdownRow {
+              rowKey: "codec"
+              visible: Model.hasRow(rows, "codec")
+              label: "Codec"
+              options: Model.codecOptions(sony.state)
+              value: String(sony.state.a2dp_codec || "")
+              onPicked: function(value) { sony.choose("codec", "a2dp_codec", value) }
+              tip: "Codec — what this computer streams to the headphones, from what PipeWire offers right now"
             }
           }
 

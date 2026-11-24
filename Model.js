@@ -72,6 +72,16 @@ var STC_TIMEOUT = [
 ]
 
 // Trade bitrate for a stronger link, or the other way around.
+// The codecs PipeWire can switch these headphones to right now, as dropdown
+// options. They arrive from the helper best first, and only what is on offer
+// is listed; the row is hidden when there is nothing to choose.
+function codecOptions(state) {
+  var codecs = (state && state.codecs) || []
+  var options = []
+  for (var i = 0; i < codecs.length; i++) options.push({ value: codecs[i], label: codecs[i] })
+  return options
+}
+
 var CONNECTION_QUALITY = [
   { value: "sound-quality", label: "Sound quality (LDAC)" },
   { value: "stable", label: "Stable connection" }
@@ -160,6 +170,8 @@ function rowsFor(state) {
   }
   if (supports(features, "dsee")) rows.push("dsee")
   if (supports(features, "connection-quality")) rows.push("connection-quality")
+  // PipeWire's, not the headphones': any model with an audio link has it.
+  if (state.codecs && state.codecs.length > 0) rows.push("codec")
   if (supports(features, "speak-to-chat")) {
     rows.push("stc")
     if (state.speak_to_chat) {
@@ -234,6 +246,10 @@ function pausesLocalPlayback(chosen, current) {
 function switchedAway(before, after, local) {
   var here = String(local || "").trim().toLowerCase()
   if (!here) return false
+  // While a codec switch or a connection-quality change renegotiates the
+  // audio link, the headset names another peer as the source for a moment;
+  // that is not playback leaving (ADR 0012).
+  if (after && after.audio_settling) return false
   var was = String(playbackSource(before) || "").trim().toLowerCase()
   var now = String(playbackSource(after) || "").trim().toLowerCase()
   return was === here && now !== "" && now !== here
@@ -413,8 +429,14 @@ function eqBlockedByCodec(state) {
 // One rule per blocked-by-another-setting row: which row it gates, the reason
 // the tooltip shows, and the predicate on the state. More rules are data, not
 // code — add a line here, not a branch in availabilityFor.
+function audioSettling(state) {
+  return !!(state && state.audio_settling)
+}
+
 var AVAILABILITY_RULES = [
-  { row: "eq", reason: "Equalizer needs the SBC codec", blocked: eqBlockedByCodec }
+  { row: "eq", reason: "Equalizer needs the SBC codec", blocked: eqBlockedByCodec },
+  { row: "codec", reason: "The audio link is renegotiating", blocked: audioSettling },
+  { row: "connection-quality", reason: "The audio link is renegotiating", blocked: audioSettling }
 ]
 
 // Whether the row is usable right now. A missing capability stays hidden via
@@ -444,6 +466,7 @@ var ROW_SETTING_KEYS = {
   "bgm-room-size": "bgm-room-size",
   "dsee": "dsee",
   "connection-quality": "connection-quality",
+  "codec": "codec",
   "stc": "speak-to-chat",
   "stc-sensitivity": "stc-sensitivity",
   "stc-timeout": "stc-timeout",
