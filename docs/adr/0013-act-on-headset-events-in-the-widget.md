@@ -20,6 +20,12 @@ always paired with an `op*` (one hold produced `keyRHold` alone).
 
 ## Decision
 
+- The headset sends the log only once asked: `c4 01 00` (libmdr's
+  LOG_SET_STATUS with the time-series operation-log type, enable). Sony's app
+  asks when it connects, which is why a trace taken after the phone had held
+  the session showed gestures and a fresh power-on did not. Negotiation now
+  asks too. A night of push-to-talk dictation through the headset microphone
+  with the log on (2026-11-23) showed it does not disturb the voice link.
 - The helper decodes the event log (`parse_v2_event`) into two state fields:
   `last_event`, the name, and `event_seq`, a counter that moves with every
   event so a repeated gesture is still a change. Only plain identifiers of up

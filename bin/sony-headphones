@@ -479,14 +479,23 @@ V2_BATTERY_WITH_THRESHOLD = 0x08
 V2_AUDIO_SUB_CONNECTION_MODE = 0x00
 
 
-# The headset's event log, sent unprompted on table 1 while the session is
-# held: `c9 01` and three length-prefixed ASCII strings, one or two of them
-# set. `key*` names a gesture (`keyRHold` is touch and hold, `keyRDoubleTap`,
-# `keyRRightFlick`…), `op*` the action the headset took for it (`opGoogle`,
-# `opPause`, `opNext`…), `unit*` a wear change and `mp*` a multipoint hand-off.
-# Seen on a WH-1000XM6 (firmware 3.1.5, 2026-11-23); a hold does not always
-# carry an `op*`, and nothing marks its release. The strings come from the
-# device, so only short plain identifiers are kept (ADR 0009).
+# The headset's operation log (libmdr's LOG_NTFY_PARAM with the time-series
+# operation-log type, `NotifyLogParamTimeSeriesOperationLog`): `c9 01`, then a
+# length-prefixed operation key, a length-prefixed operation value, and a
+# counted list of key/value sub-entries. `key*` names a gesture (`keyRHold` is
+# touch and hold, `keyRDoubleTap`, `keyRRightFlick`…), `op*` the action the
+# headset took for it (`opGoogle`, `opPause`, `opNext`…), `unit*` a wear
+# change and `mp*` a multipoint hand-off. Seen on a WH-1000XM6 (firmware
+# 3.1.5, 2026-11-23); a hold does not always carry an `op*`, and nothing
+# marks its release. The strings come from the device, so only short plain
+# identifiers are kept (ADR 0009).
+#
+# The headset sends it only once asked: `c4 01 00` (LOG_SET_STATUS, the
+# time-series type, enable). Sony's app asks when it connects, which is why a
+# trace taken after the phone had held the session showed it and a fresh
+# power-on did not. Negotiation now asks too.
+V2_LOG_SET_STATUS = 0xC4
+V2_LOG_TIME_SERIES = 0x01
 V2_EVENT_NOTIFY = 0xC9
 V2_EVENT_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,31}$")
 V2_EVENT_HOLD = "keyRHold"
@@ -497,18 +506,25 @@ V2_WEAR_NOTIFY = 0xF5
 V2_WEAR_SUB = 0x10
 
 
-def parse_v2_event(payload: bytes) -> list[str]:
-    """The event names in one `c9` frame, in order; empty if it is not one.
+def v2_operation_log_request() -> tuple[int, bytes]:
+    """Ask the headset to send its operation log (gestures, wear, hand-offs)."""
+    return req(bytes([V2_LOG_SET_STATUS, V2_LOG_TIME_SERIES, 0x00]))
 
-    Each string is length-prefixed; a frame whose lengths overrun it, or a
-    name that is not a short plain identifier, yields nothing rather than a
-    partial read.
+
+def parse_v2_event(payload: bytes) -> list[str]:
+    """The operation key and value in one `c9 01` frame, whichever are set.
+
+    The sub-entries that may follow are not read. A frame whose lengths
+    overrun it, or a name that is not a short plain identifier, yields nothing
+    rather than a partial read.
     """
-    if len(payload) < 2 or payload[0] != V2_EVENT_NOTIFY or payload[1] != 0x01:
+    if len(payload) < 4 or payload[0] != V2_EVENT_NOTIFY or payload[1] != V2_LOG_TIME_SERIES:
         return []
     names = []
     index = 2
-    while index < len(payload):
+    for _ in range(2):  # the operation key, then its value
+        if index >= len(payload):
+            return []
         length = payload[index]
         index += 1
         if index + length > len(payload):
@@ -522,8 +538,6 @@ def parse_v2_event(payload: bytes) -> list[str]:
                 return []
             names.append(name)
         index += length
-        if len(names) > 3:
-            return []
     return names
 
 
@@ -3129,6 +3143,9 @@ class Link:
         family that would have been decided by one is probed instead.
         """
         self.request(v2_support_requests(), settle=0.4)
+        # Gestures, wear and hand-offs arrive only once the operation log is
+        # on. A device without it acknowledges and ignores the request.
+        self.request([v2_operation_log_request()], settle=0.1)
         if not self.state.get("functions"):
             return
         capability = v2_setting_capability_requests(self.state)

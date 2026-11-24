@@ -619,7 +619,7 @@ session is held (2026-11-23 trace). Both are parsed (ADR 0013):
 
 | Frame | Seen when | State |
 |---|---|---|
-| `c9 01 <len><str> <len><str> <len><str>` | Every touch gesture, button press, wear change and multipoint hand-off | `last_event` (the name) and `event_seq` (moves with every event). Three length-prefixed ASCII strings, one or two set; `key*` names the gesture, `op*` the action the headset took, `unit*` wear, `mp*` multipoint. Only plain identifiers of up to 32 characters are kept (`parse_v2_event`). |
+| `c9 01 <len><key> <len><value> <count> <sub-entries…>` | Every touch gesture, button press, wear change and multipoint hand-off, once the operation log is on (`c4 01 00`) | `last_event` (the name) and `event_seq` (moves with every event). libmdr's `NotifyLogParamTimeSeriesOperationLog`: a length-prefixed operation key and value, one or both set, then a counted list of key/value sub-entries the parser does not read. `key*` names the gesture, `op*` the action the headset took, `unit*` wear, `mp*` multipoint. Only plain identifiers of up to 32 characters are kept (`parse_v2_event`). |
 | `f5 10 01 <01/00>` | On connect, and taking the headset off / putting it on | `worn`: `00` worn, `01` removed |
 
 The widget runs the `holdAction` setting on a new `keyRHold`
@@ -738,7 +738,8 @@ lives in [adr/](adr/) and [wiki/architecture.md](wiki/architecture.md).
 | `v2_touch_get` / `v2_touch_requests` / `alert_confirmation` | v2 touch panel in its named slot; the off switch's alert, and the one yes this plugin ever answers |
 | `v2_system_get` / `v2_stc_enabled_request` / `v2_bool_request` / `v2_stc_config_request` / `v2_auto_power_off_request` / `v2_stc_get` / `v2_apo_get` | v2 system / speak-to-chat |
 | `v2_device_list_get` / `v2_source_switch_request` | v2 multipoint |
-| `parse_v2_event` / `V2_EVENT_NOTIFY` / `V2_EVENT_NAME_RE` / `V2_EVENT_HOLD` | Decode the `c9` event log into names; plain identifiers only |
+| `parse_v2_event` / `V2_EVENT_NOTIFY` / `V2_EVENT_NAME_RE` / `V2_EVENT_HOLD` | Decode the `c9 01` operation log (key, value, then unread sub-entries) into names; plain identifiers only |
+| `v2_operation_log_request` / `V2_LOG_SET_STATUS` / `V2_LOG_TIME_SERIES` | `c4 01 00`: ask the headset to send its operation log; sent during negotiation (`Link.read_support`) |
 | `V2_WEAR_NOTIFY` / `V2_WEAR_SUB` | Wear detection, `f5 10 01 <state>` |
 | `v2_pause_source_request` | v2 remote playback control (`PLAY_SET_STATUS` pause), forwarded by the headset to the current playback source |
 | `v2_refresh_requests` | Full post-connect v2 query list (incl. the 3-byte voice-guidance GET) |

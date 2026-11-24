@@ -50,6 +50,31 @@ class TestEventFrames(unittest.TestCase):
             self.assertEqual(sonyhp.parse_v2_event(payload), [])
 
 
+class TestOperationLog(unittest.TestCase):
+    def test_the_switch_on_request(self):
+        self.assertEqual(sonyhp.v2_operation_log_request(),
+                         (sonyhp.MSG_COMMAND_1, bytes([0xC4, 0x01, 0x00])))
+
+    def test_negotiation_asks_for_the_log(self):
+        link = sonyhp.DemoLinkV2.__new__(sonyhp.DemoLinkV2)
+        sent = []
+        device = sonyhp.DemoDeviceV2()
+        real = device.respond
+
+        def respond(msg_type, payload):
+            sent.append(bytes(payload))
+            return real(msg_type, payload)
+        device.respond = respond
+        sonyhp.DemoLinkV2.__init__(link, device=device)
+        self.assertIn(bytes([0xC4, 0x01, 0x00]), sent)
+
+    def test_sub_entries_after_the_value_are_not_read_as_names(self):
+        # key "keyRHold", empty value, then one sub-entry ("dur", "long").
+        payload = (bytes([0xC9, 0x01, 8]) + b"keyRHold" + b"\x00" + b"\x01"
+                   + bytes([3]) + b"dur" + bytes([4]) + b"long")
+        self.assertEqual(sonyhp.parse_v2_event(payload), ["keyRHold"])
+
+
 class TestEventState(unittest.TestCase):
     def setUp(self):
         self.state = sonyhp.initial_state()
